@@ -1,0 +1,44 @@
+.git/
+.venv/
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+
+# Notebook/editor/OS local files
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+
+# Local secrets
+.env
+
+# Local data and generated artifacts
+raw_files/
+feature_store/
+reference_files/
+local_notes/
+models/
+model_artifacts/
+mlruns/
+experiments_output/
+dashboard_artifacts/
+
+# Test/type/lint/coverage caches and logs
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+logs/
+*.log
+tmp/
+temp/
+
+# Keep notebooks out of the runtime image
+*.ipynb

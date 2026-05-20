@@ -1,0 +1,9 @@
+boto3
+pandas
+openpyxl
+xlrd
+pyarrow
+scikit-learn
+xgboost
+matplotlib
+python-dotenv

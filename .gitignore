@@ -1,0 +1,44 @@
+.env
+.venv/
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+
+# Notebook/editor/OS local files
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/
+
+# Test/type/lint/coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local logs and scratch outputs
+logs/
+*.log
+tmp/
+temp/
+
+# Local-only project notes
+local_notes/
+
+# Local data and generated feature artifacts
+raw_files/
+feature_store/
+reference_files/
+
+# Local model/experiment artifacts
+models/
+model_artifacts/
+mlruns/
+experiments_output/
+dashboard_artifacts/
