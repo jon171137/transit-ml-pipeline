@@ -18,6 +18,44 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
+# Usage notes:
+#
+# 1. AWS/ECS default path
+#    Step Functions/ECS should normally run this with only PIPELINE_RUN_ID set:
+#
+#      python run_aws_streamlined_models.py
+#
+#    The script will read:
+#      s3://<bucket>/features/integrated_monthly_h3/run_id=<PIPELINE_RUN_ID>/
+#
+#    and write:
+#      s3://<bucket>/model_results/aws_streamlined/run_id=<PIPELINE_RUN_ID>/
+#      s3://<bucket>/dashboard/aws_streamlined/run_id=<PIPELINE_RUN_ID>/
+#
+# 2. Local smoke test with local feature artifacts and local outputs
+#    Use explicit base URIs for local outputs. Do not use --results-prefix for
+#    local tests unless you intentionally want to write to S3 under that prefix.
+#
+#      python run_aws_streamlined_models.py \
+#        --feature-table-uri feature_store/test_run_id/feature_table.parquet \
+#        --feature-families-uri feature_store/test_run_id/feature_families.json \
+#        --results-base-uri local_model_results/aws_streamlined/test_run \
+#        --dashboard-base-uri local_dashboard/aws_streamlined/test_run
+#
+# 3. Explicit S3 feature run
+#    Useful when testing one known feature-table run without relying on the
+#    latest S3 object:
+#
+#      python run_aws_streamlined_models.py \
+#        --feature-run-id manual-manifest-20260519T193000Z
+#
+# 4. Important modeling knobs
+#    --as-of-start controls the first monthly forecast origin. Default: 2021-01-01.
+#    --min-train-rows controls the minimum training rows required before fitting.
+#    --xgb-refresh-months controls how often XGBoost refits. Default: 12, so it
+#    still produces monthly predictions but only refreshes the model annually to
+#    keep the AWS demo reasonably light.
+#
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -108,6 +146,22 @@ def parse_args() -> argparse.Namespace:
         "--dashboard-prefix",
         default=DASHBOARD_OUTPUT_PREFIX,
         help="S3 prefix for dashboard-ready artifacts.",
+    )
+    parser.add_argument(
+        "--results-base-uri",
+        default=None,
+        help=(
+            "Explicit local path or s3:// URI for model results. "
+            "If omitted, defaults to s3://<bucket>/<results-prefix>/run_id=<run_id>."
+        ),
+    )
+    parser.add_argument(
+        "--dashboard-base-uri",
+        default=None,
+        help=(
+            "Explicit local path or s3:// URI for dashboard outputs. "
+            "If omitted, defaults to s3://<bucket>/<dashboard-prefix>/run_id=<run_id>."
+        ),
     )
     parser.add_argument(
         "--min-train-rows",
@@ -254,6 +308,12 @@ def current_model_run_id(feature_base_uri: str) -> str:
         return feature_base_uri.split(marker, 1)[1].split("/", 1)[0]
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+
+
+def resolve_output_base_uri(explicit_uri: str | None, bucket: str, prefix: str, run_id: str) -> str:
+    if explicit_uri:
+        return explicit_uri.rstrip("/")
+    return s3_uri(bucket, f"{prefix.strip('/')}/run_id={run_id}")
 
 
 def validate_feature_table(feature_table: pd.DataFrame, target: str, horizon: int) -> str:
@@ -733,8 +793,18 @@ def main() -> int:
     evaluation_frame = build_evaluation_frame(feature_table, target_col, args.as_of_start, args.horizon)
     family_audit = summarize_feature_families(feature_families, feature_table)
 
-    results_base_uri = s3_uri(args.bucket, f"{args.results_prefix.strip('/')}/run_id={model_run_id}")
-    dashboard_base_uri = s3_uri(args.bucket, f"{args.dashboard_prefix.strip('/')}/run_id={model_run_id}")
+    results_base_uri = resolve_output_base_uri(
+        args.results_base_uri,
+        args.bucket,
+        args.results_prefix,
+        model_run_id,
+    )
+    dashboard_base_uri = resolve_output_base_uri(
+        args.dashboard_base_uri,
+        args.bucket,
+        args.dashboard_prefix,
+        model_run_id,
+    )
 
     logger.info("Loaded feature table: %s rows, %s columns", len(feature_table), len(feature_table.columns))
     logger.info("Loaded feature families: %s", len(feature_families))
