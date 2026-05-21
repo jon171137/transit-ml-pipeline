@@ -138,6 +138,11 @@
 - XGBoost produces monthly predictions but refits annually by default to keep the AWS demo lightweight.
 - Local validation loaded `275` feature rows, `118` columns, `14` feature families, and `60` evaluable monthly forecast origins from `2021-01-01` through `2025-12-01`.
 - Local smoke validation produced `9,240` predictions and selected `ridge__raw__history_regime_service__alpha-10.0` as champion on the weighted score.
+- Added explicit local output base URI arguments for smoke tests:
+  - `--results-base-uri`
+  - `--dashboard-base-uri`
+- Confirmed the script runs successfully as an ECS/Step Functions state after `write_pipeline_manifest.py`.
+- The AWS workflow now writes streamlined modeling artifacts under `model_results/aws_streamlined/run_id=<run_id>/` and dashboard-ready artifacts under `dashboard/aws_streamlined/run_id=<run_id>/`.
 
 ## Pipeline Test Results
 
@@ -157,6 +162,8 @@
   - `normalize_fred_inflation.py`
   - `build_integrated_monthly_base.py`
   - `create_feature_table.py`
+  - `write_pipeline_manifest.py`
+  - `run_aws_streamlined_models.py`
 - Integrated output shape:
   - `291` rows
   - `21` columns

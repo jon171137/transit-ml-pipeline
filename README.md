@@ -36,6 +36,7 @@ flowchart TD
     D --> E
     E --> F["Create Feature Table"]
     F --> G["Write Pipeline Manifest"]
+    G --> H["Run Streamlined Models"]
 ```
 
 The AWS Step Functions workflow currently runs:
@@ -49,6 +50,7 @@ Initialize Run Context
 → Build Integrated Monthly Base
 → Create Feature Table
 → Write Pipeline Manifest
+→ Run Streamlined Models
 ```
 
 The normalizers run in parallel, and downstream steps wait until all required normalized inputs exist.
@@ -62,6 +64,7 @@ The normalizers run in parallel, and downstream steps wait until all required no
 - Pipeline runs are partitioned by `run_id`, avoiding same-day overwrites.
 - Runtime metadata captures `PIPELINE_RUN_ID` and `IMAGE_URI`.
 - A top-level run manifest is written to S3 after each successful pipeline run.
+- A streamlined modeling comparison runs in ECS and writes dashboard-ready artifacts.
 - CloudWatch log retention is set for the ECS log group.
 
 ## Main Scripts
@@ -74,6 +77,7 @@ The normalizers run in parallel, and downstream steps wait until all required no
 | `build_integrated_monthly_base.py` | Joins normalized sources into one monthly base table |
 | `create_feature_table.py` | Builds modeling features, feature families, and imputation audit outputs |
 | `write_pipeline_manifest.py` | Writes a top-level S3 manifest for the completed pipeline run |
+| `run_aws_streamlined_models.py` | Runs the AWS-friendly model comparison and dashboard artifact export |
 | `lambda_gas.py` | Local copy of gas ingestion Lambda |
 | `lambda_inflation.py` | Local copy of inflation ingestion Lambda |
 
@@ -88,9 +92,62 @@ normalized/inflation/run_id=<run_id>/inflation_normalized.parquet
 integrated/monthly_base/run_id=<run_id>/integrated_monthly_base.parquet
 features/integrated_monthly_h3/run_id=<run_id>/feature_table.parquet
 pipeline_runs/run_id=<run_id>/manifest.json
+model_results/aws_streamlined/run_id=<run_id>/metrics.parquet
+dashboard/aws_streamlined/run_id=<run_id>/performance_over_time.parquet
 ```
 
 Each step also writes metadata JSON with row counts, date ranges, source/output keys, and runtime details.
+
+## Streamlined Modeling
+
+The AWS workflow includes a lightweight modeling comparison intended to produce dashboard-ready results without running the full local research sweep.
+
+Current modeling scope:
+
+- target: `upt`
+- horizon: 3 months
+- evaluation window: 2021-present
+- modes: direct/raw and residual
+- models: seasonal naive, Ridge, Lasso, XGBoost
+- feature sets: generated feature families from `feature_families.json`
+
+The residual mode follows the notebook pattern:
+
+```text
+residual target = actual H3 target - seasonal naive forecast
+final prediction = seasonal naive forecast + residual model prediction
+```
+
+The model comparison writes:
+
+```text
+model_results/aws_streamlined/run_id=<run_id>/predictions.parquet
+model_results/aws_streamlined/run_id=<run_id>/model_runs.parquet
+model_results/aws_streamlined/run_id=<run_id>/metrics.parquet
+model_results/aws_streamlined/run_id=<run_id>/feature_importance.parquet
+model_results/aws_streamlined/run_id=<run_id>/feature_family_summary.parquet
+model_results/aws_streamlined/run_id=<run_id>/champion_selection.json
+model_results/aws_streamlined/run_id=<run_id>/batch_manifest.json
+```
+
+Dashboard-shaped exports are written to:
+
+```text
+dashboard/aws_streamlined/run_id=<run_id>/forecast_paths.parquet
+dashboard/aws_streamlined/run_id=<run_id>/performance_over_time.parquet
+dashboard/aws_streamlined/run_id=<run_id>/model_leaderboard.parquet
+dashboard/aws_streamlined/run_id=<run_id>/feature_family_summary.parquet
+dashboard/aws_streamlined/run_id=<run_id>/champion_predictions.parquet
+dashboard/aws_streamlined/run_id=<run_id>/champion_selection.json
+```
+
+Champion selection uses a weighted score:
+
+```text
+0.75 * MAE + 0.25 * RMSE
+```
+
+If configurations are within 2 percent of the best score, the selection rule prefers the simpler model.
 
 ## Run Context
 
@@ -176,7 +233,7 @@ The experiment layer should compare:
 - performance vs interpretability tradeoffs
 - runtime and artifact-size footprint
 
-Large experiment sweeps may be run locally to control AWS cost, then uploaded as curated artifacts for the dashboard.
+The AWS workflow now runs a streamlined 2021-present comparison. Larger experiment sweeps may be run locally to control AWS cost, then uploaded as curated artifacts for the dashboard.
 
 ## Dashboard Direction
 
@@ -198,4 +255,3 @@ The dashboard should read from curated static artifacts rather than triggering t
 - Local data, generated feature stores, reference files, and local planning notes are intentionally ignored.
 - Secrets are not committed.
 - `CHANGE_DOC.md` contains a more detailed development change history.
-
