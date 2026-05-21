@@ -123,6 +123,22 @@
   - `features/integrated_monthly_h3/run_id=<run_id>/imputation_log.parquet`
   - `features/integrated_monthly_h3/run_id=<run_id>/feature_family_audit.parquet`
 
+## Streamlined Modeling Script
+
+- Added `run_aws_streamlined_models.py` as the starting point for the AWS-friendly modeling comparison layer.
+- The script currently resolves and loads the feature table plus `feature_families.json` from local paths, an explicit S3 run ID, or the latest S3 feature-table run.
+- It mirrors the existing feature family definitions by reading the generated feature-family artifact instead of redefining them separately.
+- It builds a 2021-present H3 UPT rolling evaluation frame.
+- It now carries forward modeling patterns from the notebook:
+  - seasonal naive benchmark
+  - raw/direct and residual modes
+  - MAE, RMSE, R2, directional accuracy, and improvement-vs-naive metrics
+  - notebook-aligned XGBoost parameter style
+- The AWS-streamlined grid currently compares seasonal naive, Ridge, Lasso, and XGBoost across the existing feature families.
+- XGBoost produces monthly predictions but refits annually by default to keep the AWS demo lightweight.
+- Local validation loaded `275` feature rows, `118` columns, `14` feature families, and `60` evaluable monthly forecast origins from `2021-01-01` through `2025-12-01`.
+- Local smoke validation produced `9,240` predictions and selected `ridge__raw__history_regime_service__alpha-10.0` as champion on the weighted score.
+
 ## Pipeline Test Results
 
 - Successfully tested the local pipeline against S3:
