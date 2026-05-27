@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import boto3
 import numpy as np
@@ -36,6 +37,13 @@ MODEL_BASE_COLS = [
     "cpi_all_items_sa",
     "cpi_core_sa",
 ]
+OPTIONAL_MODEL_BASE_COLS = [
+    "income_reference_year",
+    "king_county_median_household_income_prior_year",
+    "king_county_monthly_household_income_prior_year",
+    "king_county_income_yoy_pct_prior_year",
+    "king_county_income_2yr_pct_prior_year",
+]
 
 CORE_OBSERVED_COLS = ["date", "upt", "vrm", "vrh", "voms"]
 EXOGENOUS_COLS = [
@@ -44,6 +52,44 @@ EXOGENOUS_COLS = [
     "cpi_all_items_sa",
     "cpi_core_sa",
 ]
+INCOME_FEATURE_COLS = [
+    "king_county_median_household_income_prior_year",
+    "king_county_monthly_household_income_prior_year",
+    "king_county_income_yoy_pct_prior_year",
+    "king_county_income_2yr_pct_prior_year",
+]
+
+REGIME_INTERACTION_FLAGS = ["is_covid_disruption", "is_post_covid"]
+
+INTERACTION_FEATURE_GROUPS = {
+    "history_regime_interactions": [
+        "upt_lag1",
+        "upt_lag3",
+        "upt_lag12",
+        "upt_rollmean_3",
+        "upt_yoy_diff",
+    ],
+    "time_regime_interactions": [
+        "time_index_months",
+        "month_sin",
+        "month_cos",
+    ],
+    "exog_regime_interactions": [
+        "seattle_gas_price_avg_lag1",
+        "seattle_gas_price_avg_yoy_diff",
+        "cpi_all_items_sa_lag1",
+        "cpi_core_sa_yoy_diff",
+    ],
+    "service_regime_interactions": [
+        "vrm_lag1",
+        "vrh_lag1",
+        "voms_lag1",
+    ],
+    "income_regime_interactions": [
+        "king_county_income_yoy_pct_prior_year",
+        "king_county_income_2yr_pct_prior_year",
+    ],
+}
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "jolese-transit-ml-portfolio-367995857052-us-east-1-an")
 INTEGRATED_OUTPUT_PREFIX = os.environ.get("INTEGRATED_OUTPUT_PREFIX", "integrated/monthly_base")
@@ -338,6 +384,53 @@ def add_lagged_features_for_group(
     return df
 
 
+def interaction_feature_names(base_features: list[str], flags: Optional[list[str]] = None) -> list[str]:
+    flags = flags or REGIME_INTERACTION_FLAGS
+    return [f"{base_feature}_x_{flag}" for base_feature in base_features for flag in flags]
+
+
+def add_regime_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for group_features in INTERACTION_FEATURE_GROUPS.values():
+        for base_feature in group_features:
+            if base_feature not in df.columns:
+                continue
+            for flag in REGIME_INTERACTION_FLAGS:
+                if flag not in df.columns:
+                    continue
+                df[f"{base_feature}_x_{flag}"] = df[base_feature] * df[flag]
+    return df
+
+
+def add_income_pressure_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    required = {
+        "king_county_income_yoy_pct_prior_year",
+        "king_county_income_2yr_pct_prior_year",
+        "king_county_monthly_household_income_prior_year",
+    }
+    if not required.issubset(df.columns):
+        return df
+
+    if "seattle_gas_price_avg_yoy_diff" in df.columns:
+        df["income_yoy_pct_x_gas_price_yoy_diff"] = (
+            df["king_county_income_yoy_pct_prior_year"] * df["seattle_gas_price_avg_yoy_diff"]
+        )
+    if "cpi_all_items_sa_yoy_diff" in df.columns:
+        df["income_yoy_pct_x_cpi_all_items_yoy_diff"] = (
+            df["king_county_income_yoy_pct_prior_year"] * df["cpi_all_items_sa_yoy_diff"]
+        )
+    if "cpi_core_sa_yoy_diff" in df.columns:
+        df["income_2yr_pct_x_cpi_core_yoy_diff"] = (
+            df["king_county_income_2yr_pct_prior_year"] * df["cpi_core_sa_yoy_diff"]
+        )
+    if "seattle_gas_price_avg_lag1" in df.columns:
+        df["gas_price_to_monthly_income"] = (
+            df["seattle_gas_price_avg_lag1"] / df["king_county_monthly_household_income_prior_year"]
+        )
+    return df
+
+
 def add_target_horizon(
     df: pd.DataFrame,
     target_col: str,
@@ -397,6 +490,8 @@ def build_feature_table(df: pd.DataFrame, target_col: str = "upt", horizon: int 
         add_yoy_pct=False,
         add_rollstd=False,
     )
+    df = add_regime_interaction_features(df)
+    df = add_income_pressure_features(df)
     df = add_target_horizon(df, target_col=target_col, horizon=horizon, date_col="date")
 
     return df
@@ -488,7 +583,16 @@ def build_feature_families(horizon: int) -> dict[str, list[str]]:
             "voms_rollmean_6",
             "voms_yoy_diff",
         ],
+        "income": INCOME_FEATURE_COLS,
+        "income_pressure_interactions": [
+            "income_yoy_pct_x_gas_price_yoy_diff",
+            "income_yoy_pct_x_cpi_all_items_yoy_diff",
+            "income_2yr_pct_x_cpi_core_yoy_diff",
+            "gas_price_to_monthly_income",
+        ],
     }
+    for group_name, base_features in INTERACTION_FEATURE_GROUPS.items():
+        feature_families[group_name] = interaction_feature_names(base_features)
 
     feature_set_library = {
         "history_only": feature_families["history_core"] + feature_families["seasonality"],
@@ -607,6 +711,85 @@ def build_feature_families(horizon: int) -> dict[str, list[str]]:
             + feature_families["cpi"]
             + feature_families["service"]
         ),
+        "history_regime_linear_interactions": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["history_regime_interactions"]
+        ),
+        "history_regime_time_linear_interactions": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["time_trend"]
+            + feature_families["history_regime_interactions"]
+            + feature_families["time_regime_interactions"]
+        ),
+        "history_regime_exog_linear_interactions": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["gas"]
+            + feature_families["cpi"]
+            + feature_families["history_regime_interactions"]
+            + feature_families["exog_regime_interactions"]
+        ),
+        "history_regime_all_exog_linear_interactions": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["time_trend"]
+            + feature_families["gas"]
+            + feature_families["cpi"]
+            + feature_families["service"]
+            + feature_families["history_regime_interactions"]
+            + feature_families["time_regime_interactions"]
+            + feature_families["exog_regime_interactions"]
+            + feature_families["service_regime_interactions"]
+        ),
+        "history_regime_income": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["income"]
+        ),
+        "history_regime_income_pressure": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["gas"]
+            + feature_families["cpi"]
+            + feature_families["income"]
+            + feature_families["income_pressure_interactions"]
+        ),
+        "history_regime_income_linear_interactions": (
+            feature_families["history_core"]
+            + feature_families["history_recent_deltas"]
+            + feature_families["history_rolls"]
+            + feature_families["history_yoy"]
+            + feature_families["seasonality"]
+            + feature_families["regime"]
+            + feature_families["income"]
+            + feature_families["income_regime_interactions"]
+        ),
     }
 
     return {
@@ -701,7 +884,9 @@ def main() -> int:
     continuity = validate_monthly_continuity(integrated_df)
     null_counts_before = integrated_df[MODEL_BASE_COLS].isna().sum().astype(int).to_dict()
 
-    model_base_df = integrated_df[MODEL_BASE_COLS].copy()
+    available_optional_cols = [col for col in OPTIONAL_MODEL_BASE_COLS if col in integrated_df.columns]
+    selected_model_base_cols = MODEL_BASE_COLS + available_optional_cols
+    model_base_df = integrated_df[selected_model_base_cols].copy()
     trimmed_df = trim_leading_rows(model_base_df, args.leading_trim)
     null_counts_after_trim = trimmed_df.isna().sum().astype(int).to_dict()
 
@@ -739,6 +924,7 @@ def main() -> int:
         "leading_trim": int(args.leading_trim),
         "continuity": continuity,
         "model_base_columns": MODEL_BASE_COLS,
+        "optional_model_base_columns": available_optional_cols,
         "core_observed_columns": CORE_OBSERVED_COLS,
         "exogenous_imputed_columns": EXOGENOUS_COLS,
         "null_counts_before_trim": null_counts_before,

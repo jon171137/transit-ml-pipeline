@@ -74,12 +74,14 @@ The normalizers run in parallel, and downstream steps wait until all required no
 | `normalize_transit.py` | Normalizes monthly transit ridership/service data |
 | `normalize_eia_gas.py` | Normalizes Seattle gas price data |
 | `normalize_fred_inflation.py` | Normalizes inflation data from FRED raw output |
+| `normalize_fred_income.py` | Normalizes King County income data from FRED raw output |
 | `build_integrated_monthly_base.py` | Joins normalized sources into one monthly base table |
 | `create_feature_table.py` | Builds modeling features, feature families, and imputation audit outputs |
 | `write_pipeline_manifest.py` | Writes a top-level S3 manifest for the completed pipeline run |
 | `run_aws_streamlined_models.py` | Runs the AWS-friendly model comparison and dashboard artifact export |
 | `lambda_gas.py` | Local copy of gas ingestion Lambda |
 | `lambda_inflation.py` | Local copy of inflation ingestion Lambda |
+| `lambda_income.py` | Local copy of King County income ingestion Lambda |
 
 ## S3 Output Layout
 
@@ -89,6 +91,7 @@ Pipeline outputs are partitioned by run ID:
 normalized/transit/run_id=<run_id>/transit_normalized.parquet
 normalized/gas/run_id=<run_id>/gas_monthly_normalized.parquet
 normalized/inflation/run_id=<run_id>/inflation_normalized.parquet
+normalized/income/run_id=<run_id>/income_normalized.parquet
 integrated/monthly_base/run_id=<run_id>/integrated_monthly_base.parquet
 features/integrated_monthly_h3/run_id=<run_id>/feature_table.parquet
 pipeline_runs/run_id=<run_id>/manifest.json
@@ -111,6 +114,48 @@ Current modeling scope:
 - models: seasonal naive, Ridge, Lasso, XGBoost
 - feature sets: generated feature families from `feature_families.json`
 
+The evaluation window and cadence can be changed for wider historical simulations:
+
+```bash
+python run_aws_streamlined_models.py \
+  --as-of-start 2016-01-01 \
+  --as-of-end 2025-12-01 \
+  --as-of-frequency-months 1 \
+  --refit-frequency-months 1
+```
+
+For each `as_of_date`, the script trains only on rows before that date and forecasts the configured horizon ahead. The default horizon is 3 months.
+
+For faster design-loop experiments, the runner can scope the model and feature
+grid:
+
+```bash
+python run_aws_streamlined_models.py \
+  --feature-table-uri feature_store/interaction_h3_smoke/feature_table.parquet \
+  --feature-families-uri feature_store/interaction_h3_smoke/feature_families.json \
+  --include-feature-family history_regime_time \
+  --include-feature-family history_regime_time_linear_interactions \
+  --include-model-type ridge \
+  --include-model-type xgboost
+```
+
+The runner also supports model-aware feature policies and simple local
+parallelism:
+
+```bash
+python run_aws_streamlined_models.py \
+  --feature-policy none \
+  --feature-policy corr_pruned \
+  --n-jobs 4
+```
+
+`corr_pruned` is currently applied only to linear models. It drops highly
+correlated columns using each as-of training window, so the selection step does
+not look at future rows. Tree and baseline models fall back to `none`.
+XGBoost uses one internal thread per configuration when `--n-jobs` is greater
+than one, which keeps the outer process-level parallelism from oversubscribing
+the machine.
+
 The residual mode follows the notebook pattern:
 
 ```text
@@ -125,9 +170,11 @@ model_results/aws_streamlined/run_id=<run_id>/predictions.parquet
 model_results/aws_streamlined/run_id=<run_id>/model_runs.parquet
 model_results/aws_streamlined/run_id=<run_id>/metrics.parquet
 model_results/aws_streamlined/run_id=<run_id>/feature_importance.parquet
+model_results/aws_streamlined/run_id=<run_id>/feature_sets.parquet
 model_results/aws_streamlined/run_id=<run_id>/feature_family_summary.parquet
 model_results/aws_streamlined/run_id=<run_id>/champion_selection.json
 model_results/aws_streamlined/run_id=<run_id>/batch_manifest.json
+model_results/aws_streamlined/run_id=<run_id>/experiment_manifest.json
 ```
 
 Dashboard-shaped exports are written to:
@@ -139,6 +186,8 @@ dashboard/aws_streamlined/run_id=<run_id>/model_leaderboard.parquet
 dashboard/aws_streamlined/run_id=<run_id>/feature_family_summary.parquet
 dashboard/aws_streamlined/run_id=<run_id>/champion_predictions.parquet
 dashboard/aws_streamlined/run_id=<run_id>/champion_selection.json
+dashboard/aws_streamlined/run_id=<run_id>/overview_top_models.parquet
+dashboard/aws_streamlined/run_id=<run_id>/overview_prediction_paths.parquet
 ```
 
 Champion selection uses a weighted score:
@@ -148,6 +197,55 @@ Champion selection uses a weighted score:
 ```
 
 If configurations are within 2 percent of the best score, the selection rule prefers the simpler model.
+
+`metrics.parquet` stores one row per model configuration and evaluation scope:
+
+```text
+overall
+pre_covid
+covid_shock
+recovery
+recent
+```
+
+The dashboard leaderboard pivots those long metric rows into period-specific columns and derived ratios such as `shock_penalty`, `recovery_ratio`, and `recent_recovery_ratio`.
+
+The feature table also includes a controlled interaction-feature experiment.
+Rather than creating every pairwise interaction, it adds targeted regime
+interactions around lagged ridership, time/seasonality, exogenous gas/CPI
+signals, and service levels. These are exposed as separate
+`*_linear_interactions` feature families so regularized linear models can be
+compared against their non-interaction counterparts.
+
+The income expansion uses FRED's King County median household income series
+(`MHIWA53033A052NCEN`). Because it is annual, the normalized monthly table uses
+prior-year income as the socioeconomic context for each month and records
+whether the reference value is observed or projected. Feature families include
+income level/growth indicators plus affordability-pressure interactions with
+gas and CPI.
+
+The experiment metadata contract is documented in:
+
+```text
+docs/experiment_metadata_contract.md
+```
+
+The first medium local dashboard-shaping run is documented in:
+
+```text
+docs/medium_experiment_v1.md
+```
+
+The streamlined runner now carries forward durable experiment identifiers such as `experiment_id`, `model_config_id`, `model_run_id`, and `feature_set_id`. It also supports optional MLflow experiment logging:
+
+```bash
+python run_aws_streamlined_models.py \
+  --enable-mlflow \
+  --mlflow-tracking-uri mlruns \
+  --mlflow-experiment-name transit-forecasting
+```
+
+MLflow is used as an experiment tracker/lab notebook. The dashboard should continue reading curated Parquet/JSON artifacts rather than depending on a live MLflow server.
 
 ## Run Context
 

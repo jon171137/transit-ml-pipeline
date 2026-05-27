@@ -174,3 +174,253 @@
 - Upgrade local Python from 3.9 to 3.10+ because boto3 has announced Python 3.9 support deprecation.
 - Consider adding a committed `.env.example` with safe placeholder values.
 - Consider packaging shared S3 latest-key discovery logic into a utility module if more scripts are added.
+
+## Experiment Metadata and MLflow Tracking
+
+- Added `docs/experiment_metadata_contract.md` to define the broader experiment artifact contract.
+- The contract separates raw experiment facts from dashboard exports:
+  - `experiment_manifest.json`
+  - `model_runs.parquet`
+  - `predictions.parquet`
+  - `metrics.parquet`
+  - `feature_sets.parquet`
+  - `feature_importance.parquet`
+  - dashboard-ready derived artifacts
+- Updated `run_aws_streamlined_models.py` so the existing AWS-streamlined outputs now include durable fields for future dashboard and DuckDB use:
+  - `experiment_id`
+  - `pipeline_run_id`
+  - `model_config_id`
+  - `model_run_id`
+  - `feature_set_id`
+  - `model_family`
+  - `model_build`
+  - `hyperparameters_json`
+  - `metric_extras_json`
+- Added `feature_sets.parquet` and `experiment_manifest.json` to the model result outputs.
+- Added optional MLflow logging to `run_aws_streamlined_models.py`.
+  - Enable with `--enable-mlflow` or `ENABLE_MLFLOW=true`.
+  - Optional controls:
+    - `--mlflow-tracking-uri`
+    - `--mlflow-experiment-name`
+    - `--mlflow-run-name`
+  - The script logs experiment-level params, champion metrics, summary counts, and compact artifacts.
+- Added `mlflow` to `requirements.txt`.
+- Local schema smoke test passed against `feature_store/test_run_id`:
+  - `3,696` predictions from a 2024-present smoke window
+  - `154` metric rows
+  - `28` feature set rows
+- Local MLflow smoke test passed with tracking URI `/private/tmp/transit_ml_mlflow_smoke/mlruns`.
+
+## Dashboard Overview Export
+
+- Added dashboard-ready overview artifacts from `run_aws_streamlined_models.py`:
+  - `overview_top_models.parquet`
+  - `overview_prediction_paths.parquet`
+- Updated `dashboard/app.py` so the first Overview tab now follows the planned top-model comparison layout:
+  - model family filter
+  - model build filter
+  - feature family filter
+  - ranking metric selector
+  - top-five model prediction paths against actual ridership and seasonal naive
+  - model detail table with hyperparameters and core metrics
+- The dashboard remains backward-compatible with older artifact folders by deriving the overview view from `model_leaderboard.parquet` and `forecast_paths.parquet` when the new overview files are absent.
+- Local dashboard smoke test passed using `/private/tmp/transit_ml_overview_smoke/dashboard`.
+- Standardized dashboard filter naming around `model_family`, `model_build`, `mode`, and `feature_family_name`.
+- Added matching filters to the Model Performance tab so larger experiment runs can be sliced before viewing the leaderboard, rolling error, and model-build comparison.
+
+## Wider Historical Simulation Controls
+
+- Added configurable historical evaluation controls to `run_aws_streamlined_models.py`:
+  - `--as-of-end`
+  - `--as-of-frequency-months`
+  - `--refit-frequency-months`
+- The runner already trained each forecast from rows strictly before `as_of_date`; the new controls make that simulation window and cadence explicit.
+- Changed the streamlined modeling default XGBoost/refit cadence to monthly.
+- Added `evaluation_period` and `shock_period_flag` to prediction/performance outputs for future shock/recovery views.
+- Added `experiment_manifest.json` to dashboard outputs so the app can display horizon, forecast cadence, and refit cadence.
+- Dashboard updates:
+  - Header now explains as-of dates, target dates, forecast horizon, forecast cadence, and refit cadence.
+  - Overview now includes a target-date window.
+  - Forecast Explorer now includes as-of and target-date windows.
+  - Model Performance now includes an as-of-date window for rolling error.
+- Local wide smoke test passed:
+  - command used `--as-of-start 2016-01-01 --as-of-frequency-months 3 --refit-frequency-months 3`
+  - `40` quarterly as-of origins
+  - target dates from `2016-04-01` through `2026-01-01`
+  - `6,160` predictions
+  - dashboard rendered successfully from `/private/tmp/transit_ml_wide_smoke/dashboard`
+- Local monthly-refit simulation passed:
+  - command used `--as-of-start 2016-01-01 --as-of-frequency-months 1 --refit-frequency-months 1 --xgb-refresh-months 1`
+  - `120` monthly as-of origins
+  - target dates from `2016-04-01` through `2026-03-01`
+  - `18,480` predictions
+  - copied dashboard artifacts to `dashboard_artifacts/aws_streamlined/latest`
+
+## Period-Specific Metrics
+
+- Updated `metrics.parquet` to use long-form evaluation-scope rows:
+  - `overall`
+  - `pre_covid`
+  - `covid_shock`
+  - `recovery`
+  - `recent`
+- Added dashboard-wide leaderboard metrics derived from those long rows:
+  - `pre_covid_mae`
+  - `covid_shock_mae`
+  - `recovery_mae`
+  - `recent_mae`
+  - `shock_penalty`
+  - `recovery_ratio`
+  - `recent_recovery_ratio`
+  - `shock_abs_increase`
+- Added dashboard explanation panels describing the period definitions and ratio interpretation.
+- Local period-metrics simulation passed:
+  - `metrics.parquet` shape: `770` rows
+  - `154` rows per evaluation scope
+  - dashboard leaderboard shape: `154` rows with period-specific columns
+  - copied latest dashboard artifacts to `dashboard_artifacts/aws_streamlined/latest`
+
+## Dashboard Period Ranking and Interaction Features
+
+- Updated `dashboard/app.py` so Model Performance can rank by:
+  - overall selection score, MAE, RMSE, R2, directional accuracy
+  - pre-COVID MAE
+  - COVID shock MAE
+  - recovery MAE
+  - recent MAE
+  - shock/recovery ratio metrics
+- Added a dedicated Period Metrics table to Model Performance so shock,
+  recovery, and recent metrics are visible without relying on horizontal table
+  scrolling.
+- Made dashboard artifact caching sensitive to file modification time so
+  replacing files under `dashboard_artifacts/aws_streamlined/latest` refreshes
+  the schema and values correctly.
+- Added targeted regime interaction features to `create_feature_table.py`:
+  - history x COVID/post-COVID flags
+  - time/seasonality x COVID/post-COVID flags
+  - gas/CPI x COVID/post-COVID flags
+  - service levels x COVID/post-COVID flags
+- Added interaction-expanded feature families:
+  - `history_regime_linear_interactions`
+  - `history_regime_time_linear_interactions`
+  - `history_regime_exog_linear_interactions`
+  - `history_regime_all_exog_linear_interactions`
+- Local feature-table smoke test passed:
+  - feature table shape: `275` rows x `148` columns
+  - `30` generated interaction columns
+  - `18` feature families
+  - `0` missing family features
+- Added scoped experiment controls to `run_aws_streamlined_models.py`:
+  - repeatable `--include-feature-family`
+  - repeatable `--include-model-type`
+- Local interaction experiments completed:
+  - full interaction run: `18` feature families, `16,632` predictions, `198` leaderboard configurations
+  - scoped interaction run: `5` feature families, `4,620` predictions, `55` leaderboard configurations
+  - full and scoped dashboard artifacts copied to:
+    - `dashboard_artifacts/aws_streamlined/interaction_full`
+    - `dashboard_artifacts/aws_streamlined/interaction_scoped`
+- Initial result:
+  - best overall score in the full run was `xgboost`, raw mode, `history_regime_time_linear_interactions`
+  - comparable non-interaction `history_regime_time` was second and within the champion equivalence band
+
+## King County Income Source
+
+- Added `lambda_income.py` for FRED ingestion of King County median household
+  income:
+  - FRED series: `MHIWA53033A052NCEN`
+  - source: U.S. Census Bureau SAIPE via FRED
+  - annual observations from `1989` through latest available `2024`
+- Added `normalize_fred_income.py`.
+  - Converts annual income to monthly prior-year context.
+  - Emits:
+    - `king_county_median_household_income_prior_year`
+    - `king_county_monthly_household_income_prior_year`
+    - `king_county_income_yoy_pct_prior_year`
+    - `king_county_income_2yr_pct_prior_year`
+    - `income_reference_method`
+  - Projects missing future reference years using a five-year dollar trend and
+    labels those rows as `projected_5yr_dollar_trend`.
+- Updated `build_integrated_monthly_base.py`:
+  - income normalized input is optional but included when available
+  - supports local path, S3 key, or `s3://` URI inputs
+  - supports local `--output-dir` for integration smoke tests
+- Updated `create_feature_table.py`:
+  - carries optional income columns into the feature table
+  - adds income feature families:
+    - `history_regime_income`
+    - `history_regime_income_pressure`
+    - `history_regime_income_linear_interactions`
+  - adds income pressure features:
+    - `income_yoy_pct_x_gas_price_yoy_diff`
+    - `income_yoy_pct_x_cpi_all_items_yoy_diff`
+    - `income_2yr_pct_x_cpi_core_yoy_diff`
+    - `gas_price_to_monthly_income`
+- Local validation:
+  - FRED income fetch returned `36` annual observations, `1989` through `2024`
+  - normalized income table shape: `291` rows x `11` columns
+  - integration with income shape: `291` rows x `29` columns
+  - income-aware feature table shape: `275` rows x `161` columns
+  - `21` feature families with `0` missing family features
+  - income modeling smoke test produced `2,016` predictions and `120` metric rows
+
+## Feature Policies and Local Parallelism
+
+- Updated `run_aws_streamlined_models.py` with repeatable feature policy
+  controls:
+  - `--feature-policy none`
+  - `--feature-policy corr_pruned`
+- `corr_pruned` currently applies to linear models only.
+  - It computes correlations inside each as-of training window.
+  - It drops columns above the configured correlation threshold before fitting.
+  - It records the reduced `selected_feature_names_json` per model run.
+  - Non-linear/baseline model types fall back to `none`.
+- Added `feature_policy` to:
+  - model configuration IDs
+  - feature set IDs
+  - predictions
+  - model runs
+  - metrics
+  - leaderboard/dashboard artifacts
+- Added `--n-jobs` process-level parallelism for independent model
+  configuration tasks.
+  - XGBoost now uses one internal thread per configuration to avoid nested
+    thread oversubscription during parallel runs.
+- Updated `dashboard/app.py`:
+  - Overview, Forecast Explorer, and Model Performance now expose
+    `feature_policy` filters.
+  - Leaderboard/detail tables include `feature_policy` when available.
+- Local smoke tests passed:
+  - sequential feature-policy run produced `48` predictions
+  - parallel `--n-jobs 2` feature-policy run produced `48` predictions
+  - `corr_pruned` reduced the income-pressure smoke family from `66` features
+    to `46` selected features
+
+## Medium Experiment V1
+
+- Ran the first medium local dashboard-shaping experiment.
+- Scope:
+  - monthly as-of dates from `2016-01-01` through `2025-12-01`
+  - 3-month UPT forecast horizon
+  - raw and residual modes
+  - models: seasonal naive, Ridge, Lasso, XGBoost
+  - feature policies: `none`, `corr_pruned`
+  - 8 representative feature families spanning history, regime/time,
+    exogenous, income, and interaction variants
+- Outputs:
+  - `18,240` prediction rows
+  - `18,240` model-run rows
+  - `760` metric rows
+  - `152` leaderboard configurations
+- Dashboard artifacts were written to:
+  - `dashboard_artifacts/aws_streamlined/medium_v1`
+  - copied to `dashboard_artifacts/aws_streamlined/latest`
+- The selected champion was XGBoost, raw mode,
+  `history_regime_time`, `feature_policy=none`.
+  - MAE: `428,050`
+  - RMSE: `841,868`
+  - selection score: `531,504`
+- The raw best score was slightly lower for
+  `history_regime_time_linear_interactions`, but the simplicity-aware champion
+  rule selected the simpler non-interaction feature family because it was within
+  the 2 percent equivalence band.
+- The run definition is documented in `docs/medium_experiment_v1.md`.
