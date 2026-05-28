@@ -2,7 +2,7 @@
 
 Production-shaped transit demand forecasting pipeline for a portfolio project focused on data engineering, historical forecasting, and MLOps-style experiment design.
 
-The project uses King County transit ridership and service data, Seattle gas prices, and inflation series to build a monthly feature table for future forecasting experiments. The current AWS pipeline is containerized, orchestrated, and writes traceable run artifacts to S3.
+The project uses King County transit ridership and service data, Seattle gas prices, inflation, and King County median household income to build a monthly feature table for historical forecasting experiments. The current AWS pipeline is containerized, orchestrated, and writes traceable run artifacts to S3. A local experiment runner, DuckDB mart, and Streamlit dashboard turn those artifacts into a portfolio-facing forecasting lab.
 
 ## Project Goal
 
@@ -31,15 +31,18 @@ flowchart TD
     A["Raw source data in S3"] --> B["Normalize Transit"]
     A --> C["Normalize Gas"]
     A --> D["Normalize Inflation"]
+    A --> I["Normalize Income (optional/local-ready)"]
     B --> E["Build Integrated Monthly Base"]
     C --> E
     D --> E
+    I --> E
     E --> F["Create Feature Table"]
     F --> G["Write Pipeline Manifest"]
     G --> H["Run Streamlined Models"]
 ```
 
-The AWS Step Functions workflow currently runs:
+The validated AWS Step Functions workflow currently runs the core normalizers,
+integration, feature creation, manifest, and streamlined model states:
 
 ```text
 Initialize Run Context
@@ -53,7 +56,9 @@ Initialize Run Context
 → Run Streamlined Models
 ```
 
-The normalizers run in parallel, and downstream steps wait until all required normalized inputs exist.
+The normalizers run in parallel, and downstream steps wait until all required
+normalized inputs exist. Income is implemented in the local project and ready to
+wire into AWS when the next container/task-definition update is promoted.
 
 ## What Is Working
 
@@ -65,6 +70,10 @@ The normalizers run in parallel, and downstream steps wait until all required no
 - Runtime metadata captures `PIPELINE_RUN_ID` and `IMAGE_URI`.
 - A top-level run manifest is written to S3 after each successful pipeline run.
 - A streamlined modeling comparison runs in ECS and writes dashboard-ready artifacts.
+- King County income is now supported as an optional FRED source and included in downstream feature families when present.
+- The Streamlit dashboard has a sidebar structure for project narrative pages and a results explorer for model comparison.
+- A first medium local experiment has produced dashboard-shaped artifacts for design validation.
+- `build_experiment_mart.py` loads experiment artifacts into DuckDB and exports dashboard-compatible Parquet/JSON views.
 - CloudWatch log retention is set for the ECS log group.
 
 ## Main Scripts
@@ -109,7 +118,7 @@ Current modeling scope:
 
 - target: `upt`
 - horizon: 3 months
-- evaluation window: 2021-present
+- evaluation window: configurable; current medium dashboard-shaping run uses 2016-present
 - modes: direct/raw and residual
 - models: seasonal naive, Ridge, Lasso, XGBoost
 - feature sets: generated feature families from `feature_families.json`
@@ -236,6 +245,8 @@ The first medium local dashboard-shaping run is documented in:
 docs/medium_experiment_v1.md
 ```
 
+That run was useful for shaping the dashboard, but it predates the seasonal-naive baseline cleanup. The next comparable run should be treated as `medium_v2` so the baseline appears once instead of once per feature family.
+
 The streamlined runner now carries forward durable experiment identifiers such as `experiment_id`, `model_config_id`, `model_run_id`, and `feature_set_id`. It also supports optional MLflow experiment logging:
 
 ```bash
@@ -268,6 +279,10 @@ such as `forecast_paths`, `model_leaderboard`, and `performance_over_time`.
 When an existing dashboard artifact folder is supplied, the builder preserves
 that presentation shape and exports compatible dashboard files. This keeps
 Streamlit working while adding a SQL layer for larger local experiment analysis.
+
+The public dashboard currently reads curated Parquet/JSON exports, not a live
+DuckDB connection. DuckDB is the local analytical mart used to validate, query,
+and reshape larger experiment outputs before publishing a static artifact bundle.
 
 ## Run Context
 
@@ -335,7 +350,9 @@ The project currently uses public Fargate tasks for simplicity during portfolio 
 
 ## Historical Modeling Plan
 
-The next major layer is historical backtesting.
+The current modeling layer already supports historical backtesting. The next
+major step is scaling the run definition from dashboard-shaping experiments to a
+larger local research sweep.
 
 Planned concept:
 
@@ -353,22 +370,43 @@ The experiment layer should compare:
 - performance vs interpretability tradeoffs
 - runtime and artifact-size footprint
 
-The AWS workflow now runs a streamlined 2021-present comparison. Larger experiment sweeps may be run locally to control AWS cost, then uploaded as curated artifacts for the dashboard.
+The AWS workflow can run a streamlined comparison to prove orchestration. Larger
+experiment sweeps may be run locally to control AWS cost, loaded into DuckDB for
+analysis, and then exported as curated artifacts for the dashboard.
 
 ## Dashboard Direction
 
 The dashboard is intended as a read-only portfolio demo, not an experiment launcher.
 
-Likely sections:
+Current top-level sections:
 
-- system overview and latest pipeline run
-- historical forecast explorer
-- model class comparison
-- feature family comparison
-- feature importance summaries
-- operational footprint, such as pipeline duration, model training time, and artifact sizes
+- Project Overview
+- System
+- Data
+- Experiment
+- Results Explorer
+
+The Results Explorer contains:
+
+- Modeling Overview
+- Forecast Explorer
+- Model Performance
+- Feature Strategy
+- Operational Footprint
 
 The dashboard should read from curated static artifacts rather than triggering training jobs.
+
+Near-term dashboard work is focused on making the current medium experiment easy
+to interpret, then rerunning a cleaner `medium_v2` artifact with the seasonal
+naive cleanup before the broader experiment sweep.
+
+## Current Next Steps
+
+- Run a fresh `medium_v2` local experiment using the cleaned seasonal-naive baseline behavior.
+- Build a DuckDB mart from `medium_v2` and export dashboard-compatible artifacts.
+- Point `dashboard_artifacts/aws_streamlined/latest` at the `medium_v2` export bundle.
+- Inspect the dashboard for model ranking, period metrics, and feature-policy behavior.
+- Then expand into the larger local experiment sweep and publish the resulting curated dashboard artifacts.
 
 ## Notes
 

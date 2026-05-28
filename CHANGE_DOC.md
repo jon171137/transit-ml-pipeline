@@ -577,3 +577,17 @@
     Streamlit dashboard
 - Updated `README.md` and `docs/experiment_metadata_contract.md` with the mart
   workflow and deployment interpretation.
+
+## Documentation Status Pass
+
+- Updated `README.md` to reflect the current project shape:
+  - AWS-validated core pipeline
+  - local-ready income expansion
+  - Streamlit dashboard structure
+  - medium local experiment status
+  - DuckDB experiment mart role
+  - near-term `medium_v2` rerun plan
+- Added a caveat to `docs/medium_experiment_v1.md` that the run predates the
+  seasonal-naive baseline cleanup.
+- Added a new ignored local planning snapshot:
+  - `local_notes/project_snapshot_2026-05-27.md`

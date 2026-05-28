@@ -6,6 +6,12 @@ Purpose: create a representative local experiment artifact for shaping the
 dashboard and validating the metadata contract before the larger local research
 sweep.
 
+Note: this run predates the seasonal-naive baseline cleanup added later on
+2026-05-27. It is still useful as a dashboard-shaping artifact, but the next
+medium run should be treated as `medium_v2` so the seasonal naive baseline is
+emitted once instead of being crossed with every feature family and feature
+policy.
+
 ## Inputs
 
 ```text
@@ -121,4 +127,3 @@ The raw best score was slightly lower for
 `history_regime_time_linear_interactions`, but the champion rule selected the
 simpler `history_regime_time` configuration because it was within the 2 percent
 equivalence band.
-
