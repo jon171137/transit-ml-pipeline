@@ -15,8 +15,8 @@ policy.
 ## Inputs
 
 ```text
-feature_table_uri=/private/tmp/feature_income_test/feature_table.parquet
-feature_families_uri=/private/tmp/feature_income_test/feature_families.json
+feature_table_uri=feature_store/income_interactions_h3_v1/feature_table.parquet
+feature_families_uri=feature_store/income_interactions_h3_v1/feature_families.json
 as_of_start=2016-01-01
 as_of_end=2025-12-01
 as_of_frequency_months=1
@@ -67,8 +67,8 @@ tree models fall back to `none`.
 
 ```bash
 .venv/bin/python run_aws_streamlined_models.py \
-  --feature-table-uri /private/tmp/feature_income_test/feature_table.parquet \
-  --feature-families-uri /private/tmp/feature_income_test/feature_families.json \
+  --feature-table-uri feature_store/income_interactions_h3_v1/feature_table.parquet \
+  --feature-families-uri feature_store/income_interactions_h3_v1/feature_families.json \
   --results-base-uri experiments_output/medium_v1/results \
   --dashboard-base-uri dashboard_artifacts/aws_streamlined/medium_v1 \
   --as-of-start 2016-01-01 \

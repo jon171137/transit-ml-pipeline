@@ -1,8 +1,8 @@
 experiment_id: phase_b_autoregressive_v1
 
 inputs:
-  feature_table_uri: /private/tmp/feature_income_test/feature_table.parquet
-  feature_families_uri: /private/tmp/feature_income_test/feature_families.json
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
 
 outputs:
   results_base_uri: experiments_output/phase_b_autoregressive_v1/results

@@ -6,8 +6,8 @@ description: >
 status: smoke
 
 inputs:
-  feature_table_uri: /private/tmp/feature_income_test/feature_table.parquet
-  feature_families_uri: /private/tmp/feature_income_test/feature_families.json
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
 
 outputs:
   results_base_uri: /private/tmp/transit_phase_a_policy_smoke/results
