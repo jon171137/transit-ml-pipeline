@@ -88,6 +88,10 @@ wire into AWS when the next container/task-definition update is promoted.
 | `create_feature_table.py` | Builds modeling features, feature families, and imputation audit outputs |
 | `write_pipeline_manifest.py` | Writes a top-level S3 manifest for the completed pipeline run |
 | `run_aws_streamlined_models.py` | Runs the AWS-friendly model comparison and dashboard artifact export |
+| `run_autoregressive_models.py` | Runs Phase B ARIMA/SARIMA/SARIMAX experiments with the same artifact contract |
+| `combine_experiment_results.py` | Combines compatible experiment result folders for mixed dashboard comparison |
+| `plan_large_experiment.py` | Expands experiment configs into pre-run count and scale summaries |
+| `build_experiment_mart.py` | Loads result artifacts into DuckDB and exports dashboard-compatible views |
 | `lambda_gas.py` | Local copy of gas ingestion Lambda |
 | `lambda_inflation.py` | Local copy of inflation ingestion Lambda |
 | `lambda_income.py` | Local copy of King County income ingestion Lambda |
@@ -158,9 +162,11 @@ python run_aws_streamlined_models.py \
   --n-jobs 4
 ```
 
-`corr_pruned` is currently applied only to linear models. It drops highly
-correlated columns using each as-of training window, so the selection step does
-not look at future rows. Tree and baseline models fall back to `none`.
+Feature policies are fit inside each as-of training window, so selection steps
+do not look at future rows. Current policy support includes correlation
+pruning, variance pruning, mutual-information selection, Lasso-based selection,
+and tree-importance selection. Policies that do not make sense for a model
+family fall back to `none`.
 XGBoost uses one internal thread per configuration when `--n-jobs` is greater
 than one, which keeps the outer process-level parallelism from oversubscribing
 the machine.
@@ -181,6 +187,7 @@ model_results/aws_streamlined/run_id=<run_id>/metrics.parquet
 model_results/aws_streamlined/run_id=<run_id>/feature_importance.parquet
 model_results/aws_streamlined/run_id=<run_id>/feature_sets.parquet
 model_results/aws_streamlined/run_id=<run_id>/feature_family_summary.parquet
+model_results/aws_streamlined/run_id=<run_id>/complexity_profile.parquet
 model_results/aws_streamlined/run_id=<run_id>/champion_selection.json
 model_results/aws_streamlined/run_id=<run_id>/batch_manifest.json
 model_results/aws_streamlined/run_id=<run_id>/experiment_manifest.json
@@ -197,6 +204,7 @@ dashboard/aws_streamlined/run_id=<run_id>/champion_predictions.parquet
 dashboard/aws_streamlined/run_id=<run_id>/champion_selection.json
 dashboard/aws_streamlined/run_id=<run_id>/overview_top_models.parquet
 dashboard/aws_streamlined/run_id=<run_id>/overview_prediction_paths.parquet
+dashboard/aws_streamlined/run_id=<run_id>/complexity_profile.parquet
 ```
 
 Champion selection uses a weighted score:
@@ -219,6 +227,11 @@ recent
 
 The dashboard leaderboard pivots those long metric rows into period-specific columns and derived ratios such as `shock_penalty`, `recovery_ratio`, and `recent_recovery_ratio`.
 
+The metrics also include ordinary R2 and nullable adjusted R2. Adjusted R2 is
+currently populated as a linear-model diagnostic when there are enough
+observations relative to selected predictors. It is useful for parsimony and
+explainability discussion, but champion selection remains based on MAE/RMSE.
+
 The feature table also includes a controlled interaction-feature experiment.
 Rather than creating every pairwise interaction, it adds targeted regime
 interactions around lagged ridership, time/seasonality, exogenous gas/CPI
@@ -233,19 +246,72 @@ whether the reference value is observed or projected. Feature families include
 income level/growth indicators plus affordability-pressure interactions with
 gas and CPI.
 
+The experiment artifacts now carry forward-compatible complexity and
+representation metadata. Tabular runs currently use `representation_policy =
+tabular_raw`; later neural-net/RNN experiments can use sequence and PCA-style
+representation policies without changing the dashboard contract.
+
 The experiment metadata contract is documented in:
 
 ```text
 docs/experiment_metadata_contract.md
 ```
 
-The first medium local dashboard-shaping run is documented in:
+## Large Local Experiments
+
+The local research track is now split into experiment blocks that write the same
+portable artifacts.
+
+Phase A covers feature-table-driven baseline, linear, bagging, randomized
+bagging, and boosting models:
+
+```bash
+.venv/bin/python run_aws_streamlined_models.py \
+  --experiment-config experiment_configs/large_phase_a_v1.yaml
+```
+
+Phase B covers autoregressive models:
+
+```bash
+.venv/bin/python run_autoregressive_models.py \
+  --experiment-config experiment_configs/phase_b_autoregressive_v1.yaml
+```
+
+The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
+uses compact service, economic, income-pressure, and service-plus-economic
+exogenous sets. Those outputs can be merged back with Phase A for a unified
+leaderboard and forecast explorer:
+
+```bash
+.venv/bin/python combine_experiment_results.py \
+  --results-dir experiments_output/large_phase_a_v1/results \
+  --results-dir experiments_output/phase_b_autoregressive_v1/results \
+  --output-results-dir experiments_output/combined_phase_ab_v1/results \
+  --output-dashboard-dir dashboard_artifacts/aws_streamlined/combined_phase_ab_v1 \
+  --experiment-id combined_phase_ab_v1
+```
+
+Then rebuild the DuckDB-backed dashboard export:
+
+```bash
+.venv/bin/python build_experiment_mart.py \
+  --results-dir experiments_output/combined_phase_ab_v1/results \
+  --dashboard-dir dashboard_artifacts/aws_streamlined/combined_phase_ab_v1 \
+  --duckdb-path experiments_output/combined_phase_ab_v1/experiments.duckdb \
+  --dashboard-export-dir dashboard_artifacts/aws_streamlined/combined_phase_ab_v1_from_duckdb \
+  --replace
+```
+
+The medium local dashboard-shaping runs are documented in:
 
 ```text
 docs/medium_experiment_v1.md
+docs/medium_experiment_v2.md
 ```
 
-That run was useful for shaping the dashboard, but it predates the seasonal-naive baseline cleanup. The next comparable run should be treated as `medium_v2` so the baseline appears once instead of once per feature family.
+`medium_v2` supersedes `medium_v1` for dashboard iteration because it includes
+the seasonal-naive baseline cleanup. The baseline now appears once as
+`baseline_naive` instead of once per feature family.
 
 The streamlined runner now carries forward durable experiment identifiers such as `experiment_id`, `model_config_id`, `model_run_id`, and `feature_set_id`. It also supports optional MLflow experiment logging:
 
@@ -257,6 +323,75 @@ python run_aws_streamlined_models.py \
 ```
 
 MLflow is used as an experiment tracker/lab notebook. The dashboard should continue reading curated Parquet/JSON artifacts rather than depending on a live MLflow server.
+
+## Large Experiment Planning
+
+The next larger local sweep is being drafted as Phase A:
+
+```text
+experiment_configs/large_phase_a_v1.yaml
+docs/large_experiment_phase_a_plan.md
+```
+
+Phase A focuses on tabular models that use the current monthly feature table:
+
+- seasonal naive
+- Ridge
+- Lasso
+- ElasticNet
+- Random Forest
+- Extra Trees
+- XGBoost
+
+Use the planner before launching the run:
+
+```bash
+python plan_large_experiment.py \
+  --config experiment_configs/large_phase_a_v1.yaml
+```
+
+The planner expands the config into estimated model configuration counts and
+model/as-of rows without training anything. ARIMA/SARIMAX and neural-net models
+are intentionally reserved for later phases because they need different
+time-series/windowed training mechanics.
+
+Current Phase A planner size:
+
+- 180 monthly as-of origins
+- 2,227 model configurations
+- 400,860 estimated model/as-of rows
+- 21 of 21 requested feature families validated
+
+The full Phase A run completed locally and exported dashboard-ready artifacts
+through the DuckDB mart:
+
+```text
+experiments_output/large_phase_a_v1/experiments.duckdb
+dashboard_artifacts/aws_streamlined/large_phase_a_v1_from_duckdb
+```
+
+The selected Phase A champion was XGBoost in raw mode with the
+`history_regime_time` feature family.
+
+The runner now supports Phase A config-driven smoke tests:
+
+```bash
+python run_aws_streamlined_models.py \
+  --experiment-config experiment_configs/phase_a_smoke.yaml
+```
+
+That smoke config exercises all Phase A model builds plus chunk/resume behavior
+over a tiny window before the full local sweep is launched.
+
+The next Phase A rerun candidate is:
+
+```text
+experiment_configs/large_phase_a_v2_complexity.yaml
+```
+
+It expands model-aware feature-policy coverage and writes
+`complexity_profile.parquet`. A small smoke version has been validated, but the
+large v2 rerun has not been launched.
 
 ## Experiment Mart
 
@@ -273,8 +408,9 @@ python build_experiment_mart.py \
 ```
 
 The mart contains raw experiment tables such as `predictions`, `model_runs`,
-`metrics`, `feature_sets`, and `feature_importance`, plus dashboard-shaped views
-such as `forecast_paths`, `model_leaderboard`, and `performance_over_time`.
+`metrics`, `feature_sets`, `feature_importance`, and `complexity_profile`, plus
+dashboard-shaped views such as `forecast_paths`, `model_leaderboard`,
+`performance_over_time`, and `complexity_profile_dashboard`.
 
 When an existing dashboard artifact folder is supplied, the builder preserves
 that presentation shape and exports compatible dashboard files. This keeps
@@ -396,16 +532,15 @@ The Results Explorer contains:
 
 The dashboard should read from curated static artifacts rather than triggering training jobs.
 
-Near-term dashboard work is focused on making the current medium experiment easy
-to interpret, then rerunning a cleaner `medium_v2` artifact with the seasonal
-naive cleanup before the broader experiment sweep.
+Near-term dashboard work is focused on inspecting the `medium_v2` artifact and
+making the current medium experiment easy to interpret before the broader
+experiment sweep.
 
 ## Current Next Steps
 
-- Run a fresh `medium_v2` local experiment using the cleaned seasonal-naive baseline behavior.
-- Build a DuckDB mart from `medium_v2` and export dashboard-compatible artifacts.
-- Point `dashboard_artifacts/aws_streamlined/latest` at the `medium_v2` export bundle.
 - Inspect the dashboard for model ranking, period metrics, and feature-policy behavior.
+- Make any small dashboard corrections exposed by the `medium_v2` artifact.
+- Decide the broader local experiment grid.
 - Then expand into the larger local experiment sweep and publish the resulting curated dashboard artifacts.
 
 ## Notes

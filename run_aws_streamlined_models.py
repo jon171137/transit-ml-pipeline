@@ -16,12 +16,19 @@ from pathlib import Path
 import boto3
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Lasso, Ridge
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+from sklearn.feature_selection import mutual_info_regression
+from sklearn.linear_model import ElasticNet, Lasso, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 # Usage notes:
 #
@@ -92,10 +99,35 @@ DEFAULT_AS_OF_START = "2021-01-01"
 FEATURE_TABLE_FILENAME = "feature_table.parquet"
 FEATURE_FAMILIES_FILENAME = "feature_families.json"
 MODEL_MODES = ["raw", "residual"]
-MODEL_ORDER = {"naive": 0, "ridge": 1, "lasso": 2, "xgboost": 3}
+MODEL_TYPES = ["naive", "ridge", "lasso", "elastic_net", "random_forest", "extra_trees", "xgboost"]
+MODEL_ORDER = {
+    "naive": 0,
+    "ridge": 1,
+    "lasso": 2,
+    "elastic_net": 3,
+    "random_forest": 4,
+    "extra_trees": 5,
+    "xgboost": 6,
+    "arima": 7,
+    "sarima": 8,
+    "sarimax": 9,
+}
 SIMPLICITY_THRESHOLD = 0.02
-FEATURE_POLICIES = ["none", "corr_pruned"]
+FEATURE_POLICIES = [
+    "none",
+    "corr_pruned",
+    "variance_pruned",
+    "mutual_info_top_20",
+    "mutual_info_top_30",
+    "lasso_selected",
+    "tree_top_20",
+    "tree_top_30",
+]
 CORR_PRUNE_THRESHOLD = 0.95
+VARIANCE_PRUNE_THRESHOLD = 1e-8
+MUTUAL_INFO_RANDOM_STATE = 42
+LASSO_SELECTOR_ALPHA = 10.0
+TREE_SELECTOR_RANDOM_STATE = 42
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,6 +136,14 @@ def parse_args() -> argparse.Namespace:
             "Run the streamlined AWS modeling comparison across notebook-aligned feature "
             "families, raw/residual modes, and a compact naive/ridge/lasso/XGBoost grid."
         )
+    )
+    parser.add_argument(
+        "--experiment-config",
+        default=None,
+        help=(
+            "Optional YAML experiment config. When provided, it can supply feature inputs, "
+            "outputs, model grids, feature families, MLflow settings, and checkpoint folders."
+        ),
     )
     parser.add_argument(
         "--bucket",
@@ -145,7 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include-model-type",
         action="append",
-        choices=["naive", "ridge", "lasso", "xgboost"],
+        choices=MODEL_TYPES,
         default=None,
         help=(
             "Model type to include. Repeat for multiple model types. "
@@ -250,6 +290,21 @@ def parse_args() -> argparse.Namespace:
         help="Number of parallel worker processes for model-config evaluation. Default: 1.",
     )
     parser.add_argument(
+        "--chunk-dir",
+        default=None,
+        help="Optional local directory for per-model-configuration chunk outputs.",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        default=None,
+        help="Optional local directory for completed_configs.parquet and failed_configs.parquet.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip model-configuration chunks already present in --chunk-dir.",
+    )
+    parser.add_argument(
         "--enable-mlflow",
         action="store_true",
         default=os.environ.get("ENABLE_MLFLOW", "").lower() in {"1", "true", "yes"},
@@ -271,6 +326,95 @@ def parse_args() -> argparse.Namespace:
         help="Optional MLflow run name. Defaults to the experiment/run ID.",
     )
     return parser.parse_args()
+
+
+def read_yaml_config(path: str) -> dict:
+    if yaml is None:
+        raise ImportError("YAML config support requires PyYAML. Install project requirements first.")
+    return yaml.safe_load(Path(path).read_text()) or {}
+
+
+def model_type_from_config_name(model_build: str) -> str:
+    if model_build == "seasonal_naive":
+        return "naive"
+    return model_build
+
+
+def model_grid_from_config(config: dict) -> list[dict]:
+    rows = []
+    models = config.get("models") or {}
+    for _model_family, builds in models.items():
+        for model_build, details in (builds or {}).items():
+            if not details.get("enabled", False):
+                continue
+            model_type = model_type_from_config_name(model_build)
+            for params in details.get("param_grid") or [{}]:
+                rows.append({"model_type": model_type, "params": params or {}})
+    return rows
+
+
+def feature_policy_list_from_config(config: dict) -> list[str]:
+    policies = []
+    for values in (config.get("feature_policies") or {}).values():
+        for policy in values or []:
+            if policy not in policies:
+                policies.append(policy)
+    return policies or ["none"]
+
+
+def apply_experiment_config(args: argparse.Namespace) -> argparse.Namespace:
+    args.experiment_config_payload = None
+    args.model_grid = None
+    if not args.experiment_config:
+        return args
+
+    config = read_yaml_config(args.experiment_config)
+    args.experiment_config_payload = config
+    inputs = config.get("inputs") or {}
+    outputs = config.get("outputs") or {}
+    forecast = config.get("forecast") or {}
+    execution = config.get("execution") or {}
+    tracking = (config.get("tracking") or {}).get("mlflow") or {}
+    checkpointing = execution.get("checkpointing") or {}
+
+    args.feature_table_uri = inputs.get("feature_table_uri", args.feature_table_uri)
+    args.feature_families_uri = inputs.get("feature_families_uri", args.feature_families_uri)
+    args.results_base_uri = outputs.get("results_base_uri", args.results_base_uri)
+    args.dashboard_base_uri = outputs.get("dashboard_base_uri", args.dashboard_base_uri)
+
+    args.target = forecast.get("target", args.target)
+    args.horizon = int(forecast.get("horizon", args.horizon))
+    args.as_of_start = forecast.get("as_of_start", args.as_of_start)
+    args.as_of_end = forecast.get("as_of_end", args.as_of_end)
+    args.as_of_frequency_months = int(forecast.get("as_of_frequency_months", args.as_of_frequency_months))
+    args.refit_frequency_months = int(forecast.get("refit_frequency_months", args.refit_frequency_months))
+    args.min_train_rows = int(forecast.get("min_train_rows", args.min_train_rows))
+
+    args.n_jobs = int(execution.get("n_jobs", args.n_jobs))
+    args.chunk_dir = checkpointing.get("chunk_dir", args.chunk_dir)
+    args.checkpoint_dir = checkpointing.get("checkpoint_dir", args.checkpoint_dir)
+    args.resume = bool(checkpointing.get("resume", args.resume))
+
+    included_families = (config.get("feature_families") or {}).get("include")
+    if included_families:
+        args.include_feature_family = list(included_families)
+
+    model_grid = model_grid_from_config(config)
+    if model_grid:
+        args.model_grid = model_grid
+        args.include_model_type = sorted({row["model_type"] for row in model_grid})
+
+    configured_policies = feature_policy_list_from_config(config)
+    if configured_policies:
+        args.feature_policy = configured_policies
+
+    if tracking:
+        args.enable_mlflow = bool(tracking.get("enabled", args.enable_mlflow))
+        args.mlflow_tracking_uri = tracking.get("tracking_uri", args.mlflow_tracking_uri)
+        args.mlflow_experiment_name = tracking.get("experiment_name", args.mlflow_experiment_name)
+        args.mlflow_run_name = tracking.get("run_name", args.mlflow_run_name)
+
+    return args
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -523,7 +667,20 @@ def directional_accuracy(actual: np.ndarray, pred: np.ndarray) -> float:
     return float((actual_diff == pred_diff).mean()) if len(actual_diff) > 0 else np.nan
 
 
-def model_param_grid() -> list[dict]:
+def adjusted_r2_score_value(r2: float, n_observations: int, n_predictors: int, model_family: str) -> float:
+    if model_family != "linear":
+        return np.nan
+    if not np.isfinite(r2):
+        return np.nan
+    if n_observations <= n_predictors + 1:
+        return np.nan
+    return float(1 - ((1 - r2) * (n_observations - 1) / (n_observations - n_predictors - 1)))
+
+
+def model_param_grid(model_grid: list[dict] | None = None) -> list[dict]:
+    if model_grid is not None:
+        return model_grid
+
     configs = [{"model_type": "naive", "params": {}}]
 
     for alpha in [1.0, 10.0]:
@@ -563,6 +720,25 @@ def build_model(model_type: str, params: dict):
                 ("model", Lasso(**params)),
             ]
         )
+    if model_type == "elastic_net":
+        return Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("model", ElasticNet(**params)),
+            ]
+        )
+    if model_type == "random_forest":
+        return RandomForestRegressor(
+            random_state=42,
+            n_jobs=1,
+            **params,
+        )
+    if model_type == "extra_trees":
+        return ExtraTreesRegressor(
+            random_state=42,
+            n_jobs=1,
+            **params,
+        )
     if model_type == "xgboost":
         return XGBRegressor(
             objective="reg:squarederror",
@@ -574,32 +750,135 @@ def build_model(model_type: str, params: dict):
 
 
 def effective_feature_policy(model_type: str, requested_policy: str) -> str:
-    if requested_policy == "corr_pruned" and model_type not in {"ridge", "lasso"}:
+    linear_models = {"ridge", "lasso", "elastic_net"}
+    tree_models = {"random_forest", "extra_trees", "xgboost"}
+    if requested_policy == "corr_pruned" and model_type not in linear_models:
+        return "none"
+    if requested_policy == "lasso_selected" and model_type not in linear_models:
+        return "none"
+    if requested_policy.startswith("tree_top_") and model_type not in tree_models:
+        return "none"
+    if requested_policy.startswith("mutual_info_top_") and model_type not in linear_models | tree_models:
+        return "none"
+    if requested_policy == "variance_pruned" and model_type not in linear_models | tree_models:
         return "none"
     return requested_policy
+
+
+def parse_top_k_policy(policy: str, prefix: str, default: int) -> int:
+    if not policy.startswith(prefix):
+        return default
+    try:
+        return max(1, int(policy.replace(prefix, "", 1)))
+    except ValueError:
+        return default
+
+
+def top_k_columns(scores: pd.Series, k: int) -> list[str]:
+    clean_scores = scores.replace([np.inf, -np.inf], np.nan).dropna()
+    if clean_scores.empty:
+        return []
+    return clean_scores.sort_values(ascending=False).head(k).index.tolist()
 
 
 def apply_feature_policy(
     train_df: pd.DataFrame,
     feature_cols: list[str],
+    y_train: pd.Series | None,
     policy: str,
     threshold: float = CORR_PRUNE_THRESHOLD,
-) -> list[str]:
+) -> dict:
+    result = {
+        "selected_features": list(feature_cols),
+        "dropped_features": [],
+        "policy_params": {},
+        "n_features_before_policy": len(feature_cols),
+        "n_features_after_policy": len(feature_cols),
+    }
     if policy == "none" or len(feature_cols) <= 1:
-        return feature_cols
-    if policy != "corr_pruned":
-        raise ValueError(f"Unsupported feature policy: {policy}")
+        return result
 
     X = train_df[feature_cols].astype(float)
-    corr = X.corr().abs()
-    upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-    drop_cols = [
-        column
-        for column in upper.columns
-        if any(upper[column] > threshold)
-    ]
-    selected = [column for column in feature_cols if column not in set(drop_cols)]
-    return selected or feature_cols[:1]
+    selected = list(feature_cols)
+    params = {}
+
+    if policy == "variance_pruned":
+        variances = X.var(axis=0)
+        params = {"threshold": VARIANCE_PRUNE_THRESHOLD}
+        selected = variances[variances > VARIANCE_PRUNE_THRESHOLD].index.tolist()
+    elif policy == "corr_pruned":
+        params = {"threshold": threshold}
+        corr = X.corr().abs()
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        drop_cols = [
+            column
+            for column in upper.columns
+            if any(upper[column] > threshold)
+        ]
+        selected = [column for column in feature_cols if column not in set(drop_cols)]
+    elif policy.startswith("mutual_info_top_"):
+        if y_train is None:
+            raise ValueError("mutual_info_top_k requires y_train.")
+        k = parse_top_k_policy(policy, "mutual_info_top_", default=30)
+        params = {"k": k, "random_state": MUTUAL_INFO_RANDOM_STATE}
+        scores = mutual_info_regression(
+            X,
+            y_train.astype(float),
+            random_state=MUTUAL_INFO_RANDOM_STATE,
+        )
+        selected = top_k_columns(pd.Series(scores, index=feature_cols), min(k, len(feature_cols)))
+    elif policy == "lasso_selected":
+        if y_train is None:
+            raise ValueError("lasso_selected requires y_train.")
+        params = {"alpha": LASSO_SELECTOR_ALPHA, "max_iter": 10000}
+        selector = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("model", Lasso(alpha=LASSO_SELECTOR_ALPHA, max_iter=10000)),
+            ]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            selector.fit(X, y_train.astype(float))
+        coefs = pd.Series(np.abs(selector.named_steps["model"].coef_), index=feature_cols)
+        selected = coefs[coefs > 0].sort_values(ascending=False).index.tolist()
+    elif policy.startswith("tree_top_"):
+        if y_train is None:
+            raise ValueError("tree_top_k requires y_train.")
+        k = parse_top_k_policy(policy, "tree_top_", default=30)
+        params = {
+            "k": k,
+            "selector_model": "extra_trees",
+            "n_estimators": 100,
+            "max_depth": 4,
+            "random_state": TREE_SELECTOR_RANDOM_STATE,
+        }
+        selector = ExtraTreesRegressor(
+            n_estimators=100,
+            max_depth=4,
+            random_state=TREE_SELECTOR_RANDOM_STATE,
+            n_jobs=1,
+        )
+        selector.fit(X, y_train.astype(float))
+        selected = top_k_columns(
+            pd.Series(selector.feature_importances_, index=feature_cols),
+            min(k, len(feature_cols)),
+        )
+    else:
+        raise ValueError(f"Unsupported feature policy: {policy}")
+
+    if not selected:
+        selected = feature_cols[:1]
+    dropped = [column for column in feature_cols if column not in set(selected)]
+    result.update(
+        {
+            "selected_features": selected,
+            "dropped_features": dropped,
+            "policy_params": params,
+            "n_features_after_policy": len(selected),
+        }
+    )
+    return result
 
 
 def eligible_feature_columns(feature_families: dict, family_name: str, feature_table: pd.DataFrame) -> list[str]:
@@ -619,15 +898,61 @@ def config_id(model_type: str, mode: str, feature_family_name: str, params: dict
 def model_family_for(model_type: str) -> str:
     if model_type == "naive":
         return "baseline"
-    if model_type in {"ridge", "lasso"}:
+    if model_type in {"ridge", "lasso", "elastic_net"}:
         return "linear"
-    if model_type == "xgboost":
+    if model_type in {"random_forest", "extra_trees", "xgboost"}:
         return "tree"
+    if model_type in {"arima", "sarima", "sarimax"}:
+        return "autoregressive"
     return "other"
+
+
+def ensemble_method_for(model_type: str) -> str:
+    if model_type == "random_forest":
+        return "bagging"
+    if model_type == "extra_trees":
+        return "randomized_bagging"
+    if model_type == "xgboost":
+        return "boosting"
+    return ""
 
 
 def model_build_for(model_type: str) -> str:
     return "seasonal_naive" if model_type == "naive" else model_type
+
+
+def framework_for(model_type: str) -> str:
+    if model_type == "xgboost":
+        return "xgboost"
+    if model_type in {"arima", "sarima", "sarimax"}:
+        return "statsmodels"
+    if model_type in {"naive", "ridge", "lasso", "elastic_net", "random_forest", "extra_trees"}:
+        return "sklearn"
+    return ""
+
+
+def default_representation_metadata(model_family: str = "tabular") -> dict:
+    if model_family == "neural_net":
+        policy = "sequence_raw"
+    else:
+        policy = "tabular_raw"
+    return {
+        "representation_policy": policy,
+        "representation_params_json": "{}",
+        "n_representation_features": np.nan,
+        "sequence_length": np.nan,
+        "sequence_stride": np.nan,
+        "prediction_head": "direct_horizon",
+        "training_window_months": np.nan,
+        "validation_strategy": "rolling_as_of",
+        "early_stopping_used": False,
+        "epochs_trained": np.nan,
+        "best_epoch": np.nan,
+        "hardware_type": os.environ.get("HARDWARE_TYPE", "cpu"),
+        "device": os.environ.get("DEVICE", "cpu"),
+        "gpu_name": os.environ.get("GPU_NAME", ""),
+        "cuda_version": os.environ.get("CUDA_VERSION", ""),
+    }
 
 
 def feature_set_id(feature_family_name: str, mode: str, feature_cols: list[str], feature_policy: str = "none") -> str:
@@ -678,7 +1003,7 @@ def extract_feature_importance(
     feature_cols: list[str],
 ) -> list[dict]:
     rows = []
-    if model_type in {"ridge", "lasso"}:
+    if model_type in {"ridge", "lasso", "elastic_net"}:
         coefs = model.named_steps["model"].coef_
         for feature_name, importance in zip(feature_cols, coefs):
             rows.append(
@@ -689,7 +1014,7 @@ def extract_feature_importance(
                     "importance_abs": float(abs(importance)),
                 }
             )
-    elif model_type == "xgboost":
+    elif model_type in {"random_forest", "extra_trees", "xgboost"}:
         for feature_name, importance in zip(feature_cols, model.feature_importances_):
             rows.append(
                 {
@@ -757,6 +1082,8 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
 
     model_family = model_family_for(model_type)
     model_build = model_build_for(model_type)
+    ensemble_method = ensemble_method_for(model_type)
+    representation_metadata = default_representation_metadata(model_family)
     hyperparameters_json = json.dumps(params, sort_keys=True)
     run_config_id = config_id(model_type, mode, feature_family_name, params, feature_policy)
     current_feature_set_id = feature_set_id(feature_family_name, mode, feature_cols, feature_policy)
@@ -777,6 +1104,7 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
     cached_model = None
     cached_train_date = None
     cached_feature_cols = None
+    cached_policy_result = None
 
     for _, eval_row in evaluation_frame.iterrows():
         as_of_date = eval_row["date"]
@@ -790,6 +1118,13 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
         started = time.perf_counter()
         model = None
         selected_feature_cols = feature_cols
+        policy_result = {
+            "selected_features": list(feature_cols),
+            "dropped_features": [],
+            "policy_params": {},
+            "n_features_before_policy": len(feature_cols),
+            "n_features_after_policy": len(feature_cols),
+        }
         if model_type != "naive":
             should_fit = True
             if model_type == "xgboost" and cached_model is not None:
@@ -801,12 +1136,13 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
                 should_fit = months_since_fit >= refit_frequency_months
 
             if should_fit:
-                selected_feature_cols = apply_feature_policy(train_df, feature_cols, feature_policy)
-                X_train = train_df[selected_feature_cols].astype(float)
                 if mode == "residual":
                     y_train = train_df[target_col] - train_df["seasonal_naive_proxy"]
                 else:
                     y_train = train_df[target_col]
+                policy_result = apply_feature_policy(train_df, feature_cols, y_train, feature_policy)
+                selected_feature_cols = policy_result["selected_features"]
+                X_train = train_df[selected_feature_cols].astype(float)
 
                 model = build_model(model_type, params)
                 with warnings.catch_warnings():
@@ -815,9 +1151,11 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
                 cached_model = model
                 cached_train_date = as_of_date
                 cached_feature_cols = selected_feature_cols
+                cached_policy_result = policy_result
             else:
                 model = cached_model
                 selected_feature_cols = cached_feature_cols or feature_cols
+                policy_result = cached_policy_result or policy_result
 
         train_seconds = time.perf_counter() - started
         pred = prediction_for_row(model, model_type, mode, eval_row, selected_feature_cols)
@@ -844,11 +1182,19 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
             "model_family": model_family,
             "model_build": model_build,
             "model_type": model_type,
+            "ensemble_method": ensemble_method,
             "mode": mode,
             "feature_family_name": feature_family_name,
             "feature_policy": feature_policy,
             "feature_set_id": current_feature_set_id,
             "n_features": len(selected_feature_cols),
+            "n_features_before_policy": int(policy_result["n_features_before_policy"]),
+            "n_features_after_policy": int(policy_result["n_features_after_policy"]),
+            "representation_policy": representation_metadata["representation_policy"],
+            "n_representation_features": len(selected_feature_cols),
+            "sequence_length": representation_metadata["sequence_length"],
+            "sequence_stride": representation_metadata["sequence_stride"],
+            "prediction_head": representation_metadata["prediction_head"],
             "n_train": int(len(train_df)),
         }
         predictions.append(
@@ -878,6 +1224,25 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
                 "params": hyperparameters_json,
                 "hyperparameters_json": hyperparameters_json,
                 "selected_feature_names_json": json.dumps(selected_feature_cols, sort_keys=True),
+                "dropped_feature_names_json": json.dumps(policy_result["dropped_features"], sort_keys=True),
+                "feature_policy_params_json": json.dumps(policy_result["policy_params"], sort_keys=True),
+                "representation_policy": representation_metadata["representation_policy"],
+                "representation_params_json": representation_metadata["representation_params_json"],
+                "n_representation_features": len(selected_feature_cols),
+                "sequence_length": representation_metadata["sequence_length"],
+                "sequence_stride": representation_metadata["sequence_stride"],
+                "prediction_head": representation_metadata["prediction_head"],
+                "training_window_months": representation_metadata["training_window_months"],
+                "validation_strategy": representation_metadata["validation_strategy"],
+                "early_stopping_used": representation_metadata["early_stopping_used"],
+                "epochs_trained": representation_metadata["epochs_trained"],
+                "best_epoch": representation_metadata["best_epoch"],
+                "framework": framework_for(model_type),
+                "framework_version": "",
+                "hardware_type": representation_metadata["hardware_type"],
+                "device": representation_metadata["device"],
+                "gpu_name": representation_metadata["gpu_name"],
+                "cuda_version": representation_metadata["cuda_version"],
                 "refit_frequency_months": (
                     refit_frequency_months
                     if refit_frequency_months is not None
@@ -925,6 +1290,61 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
     )
 
 
+def task_identifier(task: dict) -> str:
+    return config_id(
+        task["config"]["model_type"],
+        task["mode"],
+        task["feature_family_name"],
+        task["config"]["params"],
+        task["feature_policy"],
+    )
+
+
+def chunk_folder(chunk_dir: str | Path, task_id: str) -> Path:
+    digest = hashlib.sha1(task_id.encode("utf-8")).hexdigest()[:12]
+    safe_prefix = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in task_id[:80])
+    return Path(chunk_dir) / f"{safe_prefix}__{digest}"
+
+
+def chunk_is_complete(chunk_dir: str | Path, task_id: str) -> bool:
+    folder = chunk_folder(chunk_dir, task_id)
+    return (folder / "predictions.parquet").exists() and (folder / "model_runs.parquet").exists()
+
+
+def write_chunk_result(chunk_dir: str | Path, task_id: str, chunk: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]) -> None:
+    folder = chunk_folder(chunk_dir, task_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    names = ["predictions", "model_runs", "feature_importance", "feature_sets"]
+    for name, df in zip(names, chunk):
+        if not df.empty:
+            df.to_parquet(folder / f"{name}.parquet", index=False)
+    write_json_uri(str(folder / "chunk_manifest.json"), {"task_id": task_id, "completed_at_utc": datetime.now(timezone.utc).isoformat()})
+
+
+def read_chunk_result(chunk_dir: str | Path, task_id: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    folder = chunk_folder(chunk_dir, task_id)
+    frames = []
+    for name in ["predictions", "model_runs", "feature_importance", "feature_sets"]:
+        path = folder / f"{name}.parquet"
+        frames.append(pd.read_parquet(path) if path.exists() else pd.DataFrame())
+    return tuple(frames)
+
+
+def append_checkpoint_rows(checkpoint_dir: str | Path, filename: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    folder = Path(checkpoint_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / filename
+    new_rows = pd.DataFrame(rows)
+    if path.exists():
+        existing = pd.read_parquet(path)
+        new_rows = pd.concat([existing, new_rows], ignore_index=True)
+    if "task_id" in new_rows.columns:
+        new_rows = new_rows.drop_duplicates(subset=["task_id"], keep="last")
+    new_rows.to_parquet(path, index=False)
+
+
 def run_model_comparison(
     feature_table: pd.DataFrame,
     feature_families: dict,
@@ -939,7 +1359,11 @@ def run_model_comparison(
     refit_frequency_months: int | None,
     include_model_types: set[str] | None = None,
     feature_policies: list[str] | None = None,
+    model_grid: list[dict] | None = None,
     n_jobs: int = 1,
+    chunk_dir: str | None = None,
+    checkpoint_dir: str | None = None,
+    resume: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     full_table = add_seasonal_naive_proxy(feature_table, target_col=target_col, seasonal_periods=12)
     full_table["date"] = pd.to_datetime(full_table["date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
@@ -947,7 +1371,7 @@ def run_model_comparison(
 
     configs = [
         config
-        for config in model_param_grid()
+        for config in model_param_grid(model_grid)
         if include_model_types is None or config["model_type"] in include_model_types
     ]
     if not configs:
@@ -1022,25 +1446,68 @@ def run_model_comparison(
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     chunks = []
-    if n_jobs and n_jobs > 1 and len(tasks) > 1:
+    tasks_to_run = tasks
+    failed_rows = []
+    completed_rows = []
+    if chunk_dir:
+        for task in tasks:
+            task["task_id"] = task_identifier(task)
+        if resume:
+            existing_tasks = [task for task in tasks if chunk_is_complete(chunk_dir, task["task_id"])]
+            tasks_to_run = [task for task in tasks if not chunk_is_complete(chunk_dir, task["task_id"])]
+            if existing_tasks:
+                logger.info("Resuming from %s completed model configuration chunks.", len(existing_tasks))
+                chunks.extend(read_chunk_result(chunk_dir, task["task_id"]) for task in existing_tasks)
+                completed_rows.extend(
+                    {
+                        "task_id": task["task_id"],
+                        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "source": "existing_chunk",
+                    }
+                    for task in existing_tasks
+                )
+        logger.info("Chunk checkpoint directory: %s", chunk_dir)
+    if checkpoint_dir:
+        logger.info("Run checkpoint directory: %s", checkpoint_dir)
+        if completed_rows:
+            append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows)
+
+    if n_jobs and n_jobs > 1 and len(tasks_to_run) > 1:
         logger.info("Running model configuration tasks with %s parallel workers.", n_jobs)
         with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            future_to_task = {executor.submit(run_config_evaluation, task): task for task in tasks}
+            future_to_task = {executor.submit(run_config_evaluation, task): task for task in tasks_to_run}
             for future in as_completed(future_to_task):
                 task = future_to_task[future]
+                task_id = task.get("task_id") or task_identifier(task)
                 try:
-                    chunks.append(future.result())
+                    chunk = future.result()
+                    chunks.append(chunk)
+                    if chunk_dir:
+                        write_chunk_result(chunk_dir, task_id, chunk)
+                    completed_rows.append({"task_id": task_id, "completed_at_utc": datetime.now(timezone.utc).isoformat()})
+                    if checkpoint_dir:
+                        append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows)
                 except Exception as exc:
-                    task_id = config_id(
-                        task["config"]["model_type"],
-                        task["mode"],
-                        task["feature_family_name"],
-                        task["config"]["params"],
-                        task["feature_policy"],
-                    )
+                    failed_rows.append({"task_id": task_id, "error": repr(exc), "failed_at_utc": datetime.now(timezone.utc).isoformat()})
+                    if checkpoint_dir:
+                        append_checkpoint_rows(checkpoint_dir, "failed_configs.parquet", failed_rows)
                     raise RuntimeError(f"Model configuration failed: {task_id}") from exc
     else:
-        chunks = [run_config_evaluation(task) for task in tasks]
+        for task in tasks_to_run:
+            task_id = task.get("task_id") or task_identifier(task)
+            try:
+                chunk = run_config_evaluation(task)
+                chunks.append(chunk)
+                if chunk_dir:
+                    write_chunk_result(chunk_dir, task_id, chunk)
+                completed_rows.append({"task_id": task_id, "completed_at_utc": datetime.now(timezone.utc).isoformat()})
+                if checkpoint_dir:
+                    append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows)
+            except Exception as exc:
+                failed_rows.append({"task_id": task_id, "error": repr(exc), "failed_at_utc": datetime.now(timezone.utc).isoformat()})
+                if checkpoint_dir:
+                    append_checkpoint_rows(checkpoint_dir, "failed_configs.parquet", failed_rows)
+                raise RuntimeError(f"Model configuration failed: {task_id}") from exc
 
     predictions_frames = [chunk[0] for chunk in chunks if not chunk[0].empty]
     model_run_frames = [chunk[1] for chunk in chunks if not chunk[1].empty]
@@ -1067,6 +1534,7 @@ def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
         "model_family",
         "model_build",
         "model_type",
+        "ensemble_method",
         "mode",
         "feature_family_name",
         "feature_policy",
@@ -1080,6 +1548,7 @@ def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
             model_family,
             model_build,
             model_type,
+            ensemble_method,
             mode,
             feature_family_name,
             feature_policy,
@@ -1094,6 +1563,9 @@ def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
         rmse = mean_squared_error(actual, pred) ** 0.5
         mae_naive = mean_absolute_error(actual, naive)
         rmse_naive = mean_squared_error(actual, naive) ** 0.5
+        r2 = float(r2_score(actual, pred)) if len(group) > 1 else np.nan
+        n_features = int(group["n_features"].max())
+        r2_adjusted = adjusted_r2_score_value(r2, len(group), n_features, model_family)
         rows.append(
             {
                 "experiment_id": group["experiment_id"].iloc[0],
@@ -1108,15 +1580,17 @@ def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
                 "model_family": model_family,
                 "model_build": model_build,
                 "model_type": model_type,
+                "ensemble_method": ensemble_method,
                 "mode": mode,
                 "feature_family_name": feature_family_name,
                 "feature_policy": feature_policy,
                 "feature_set_id": feature_set_id_value,
                 "n_predictions": int(len(group)),
-                "n_features": int(group["n_features"].max()),
+                "n_features": n_features,
                 "mae": float(mae),
                 "rmse": float(rmse),
-                "r2": float(r2_score(actual, pred)) if len(group) > 1 else np.nan,
+                "r2": r2,
+                "r2_adjusted": r2_adjusted,
                 "diracc": directional_accuracy(actual, pred),
                 "mae_naive": float(mae_naive),
                 "rmse_naive": float(rmse_naive),
@@ -1157,6 +1631,7 @@ def build_family_summary(metrics: pd.DataFrame) -> pd.DataFrame:
             best_rmse=("rmse", "min"),
             best_mae=("mae", "min"),
             best_r2=("r2", "max"),
+            best_r2_adjusted=("r2_adjusted", "max"),
             best_diracc=("diracc", "max"),
             best_rmse_improvement_vs_naive=("rmse_improvement_vs_naive", "max"),
             best_mae_improvement_vs_naive=("mae_improvement_vs_naive", "max"),
@@ -1200,6 +1675,212 @@ def safe_ratio(numerator: float, denominator: float) -> float:
     return float(numerator / denominator)
 
 
+def safe_json_loads(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if pd.isna(value):
+        return {}
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def numeric_param(params: dict, name: str, default: float = 0.0) -> float:
+    value = params.get(name, default)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def order_sum(params: dict, name: str) -> float:
+    values = params.get(name) or []
+    if not isinstance(values, (list, tuple)):
+        return 0.0
+    return float(sum(abs(int(value)) for value in values if value is not None))
+
+
+def model_size_proxy(row: pd.Series) -> float:
+    params = safe_json_loads(row.get("hyperparameters_json"))
+    model_type = row.get("model_type")
+    n_features = numeric_param(row, "n_selected_features", numeric_param(row, "n_features", 0.0))
+    if model_type == "naive":
+        return 1.0
+    if model_type in {"ridge", "lasso", "elastic_net"}:
+        return max(1.0, n_features)
+    if model_type in {"random_forest", "extra_trees"}:
+        depth = numeric_param(params, "max_depth", 12.0)
+        estimators = numeric_param(params, "n_estimators", 1.0)
+        return max(1.0, estimators * max(1.0, depth))
+    if model_type == "xgboost":
+        depth = numeric_param(params, "max_depth", 1.0)
+        estimators = numeric_param(params, "n_estimators", 1.0)
+        colsample = numeric_param(params, "colsample_bytree", 1.0)
+        return max(1.0, estimators * max(1.0, depth) * max(0.1, colsample))
+    if model_type in {"arima", "sarima", "sarimax"}:
+        return max(1.0, order_sum(params, "order") + order_sum(params, "seasonal_order") + n_features)
+    return max(1.0, n_features)
+
+
+def normalize_series(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    if numeric.empty:
+        return numeric
+    low = numeric.min()
+    high = numeric.max()
+    if high == low:
+        return pd.Series(np.zeros(len(numeric)), index=numeric.index)
+    return (numeric - low) / (high - low)
+
+
+def base_interpretability(row: pd.Series) -> float:
+    family = row.get("model_family")
+    if family == "baseline":
+        return 100.0
+    if family == "linear":
+        return 86.0
+    if family == "autoregressive":
+        return 76.0
+    if family == "tree":
+        return 58.0
+    return 50.0
+
+
+def build_complexity_profile(model_runs: pd.DataFrame, metrics: pd.DataFrame | None = None) -> pd.DataFrame:
+    if model_runs.empty:
+        return pd.DataFrame()
+
+    group_cols = [
+        "model_config_id",
+        "config_id",
+        "model_family",
+        "model_build",
+        "model_type",
+        "ensemble_method",
+        "mode",
+        "feature_family_name",
+        "feature_policy",
+        "feature_set_id",
+    ]
+    work = model_runs.copy()
+    if "n_features_before_policy" not in work:
+        work["n_features_before_policy"] = work["n_features"]
+    if "n_features_after_policy" not in work:
+        work["n_features_after_policy"] = work["n_features"]
+    if "feature_policy_params_json" not in work:
+        work["feature_policy_params_json"] = "{}"
+    if "dropped_feature_names_json" not in work:
+        work["dropped_feature_names_json"] = "[]"
+    if "aic" not in work:
+        work["aic"] = np.nan
+    if "bic" not in work:
+        work["bic"] = np.nan
+    default_columns = {
+        "representation_policy": "tabular_raw",
+        "representation_params_json": "{}",
+        "n_representation_features": np.nan,
+        "sequence_length": np.nan,
+        "sequence_stride": np.nan,
+        "prediction_head": "direct_horizon",
+        "training_window_months": np.nan,
+        "validation_strategy": "rolling_as_of",
+        "early_stopping_used": False,
+        "epochs_trained": np.nan,
+        "best_epoch": np.nan,
+        "framework": "",
+        "framework_version": "",
+        "hardware_type": "cpu",
+        "device": "cpu",
+        "gpu_name": "",
+        "cuda_version": "",
+    }
+    for column, default_value in default_columns.items():
+        if column not in work:
+            work[column] = default_value
+
+    profile = (
+        work.groupby(group_cols, dropna=False)
+        .agg(
+            experiment_id=("experiment_id", "first"),
+            pipeline_run_id=("pipeline_run_id", "first"),
+            hyperparameters_json=("hyperparameters_json", "first"),
+            feature_policy_params_json=("feature_policy_params_json", "first"),
+            representation_policy=("representation_policy", "first"),
+            representation_params_json=("representation_params_json", "first"),
+            n_representation_features=("n_representation_features", "mean"),
+            sequence_length=("sequence_length", "first"),
+            sequence_stride=("sequence_stride", "first"),
+            prediction_head=("prediction_head", "first"),
+            training_window_months=("training_window_months", "first"),
+            validation_strategy=("validation_strategy", "first"),
+            early_stopping_used=("early_stopping_used", "first"),
+            epochs_trained=("epochs_trained", "max"),
+            best_epoch=("best_epoch", "min"),
+            framework=("framework", "first"),
+            framework_version=("framework_version", "first"),
+            hardware_type=("hardware_type", "first"),
+            device=("device", "first"),
+            gpu_name=("gpu_name", "first"),
+            cuda_version=("cuda_version", "first"),
+            n_input_features=("n_features_before_policy", "max"),
+            n_selected_features=("n_features_after_policy", "mean"),
+            min_selected_features=("n_features_after_policy", "min"),
+            max_selected_features=("n_features_after_policy", "max"),
+            avg_train_seconds=("train_seconds", "mean"),
+            total_train_seconds=("train_seconds", "sum"),
+            model_run_count=("model_run_id", "nunique"),
+            refit_count=("model_refit", "sum"),
+            avg_n_train=("n_train", "mean"),
+            aic_mean=("aic", "mean"),
+            bic_mean=("bic", "mean"),
+            selected_feature_names_json=("selected_feature_names_json", "first"),
+            dropped_feature_names_json=("dropped_feature_names_json", "first"),
+        )
+        .reset_index()
+    )
+    profile["n_selected_features"] = profile["n_selected_features"].round(3)
+    profile["feature_reduction_ratio"] = profile.apply(
+        lambda row: safe_ratio(
+            row["n_input_features"] - row["n_selected_features"],
+            row["n_input_features"],
+        ),
+        axis=1,
+    ).fillna(0.0)
+    profile["model_size_proxy"] = profile.apply(model_size_proxy, axis=1)
+    profile["compute_proxy"] = profile["total_train_seconds"].clip(lower=0)
+    feature_norm = normalize_series(profile["n_selected_features"])
+    size_norm = normalize_series(np.log1p(profile["model_size_proxy"]))
+    compute_norm = normalize_series(np.log1p(profile["compute_proxy"]))
+    profile["complexity_score"] = (100 * (0.40 * feature_norm + 0.35 * size_norm + 0.25 * compute_norm)).round(3)
+    profile["compute_score"] = (100 * compute_norm).round(3)
+    profile["interpretability_score"] = profile.apply(base_interpretability, axis=1)
+    profile["interpretability_score"] = (
+        profile["interpretability_score"]
+        - 0.25 * normalize_series(profile["n_selected_features"]) * 100
+        - 0.15 * normalize_series(np.log1p(profile["model_size_proxy"])) * 100
+    ).clip(lower=0, upper=100).round(3)
+
+    if metrics is not None and not metrics.empty:
+        overall_cols = ["model_config_id", "mae", "rmse", "r2", "r2_adjusted", "selection_score"]
+        overall = metrics[metrics["evaluation_scope"] == "overall"][
+            [col for col in overall_cols if col in metrics.columns]
+        ].copy()
+        overall = overall.rename(
+            columns={
+                "mae": "overall_mae",
+                "rmse": "overall_rmse",
+                "r2": "overall_r2",
+                "r2_adjusted": "overall_r2_adjusted",
+                "selection_score": "overall_selection_score",
+            }
+        )
+        profile = profile.merge(overall, on="model_config_id", how="left")
+    return profile.sort_values(["complexity_score", "model_config_id"]).reset_index(drop=True)
+
+
 def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) -> pd.DataFrame:
     index_cols = [
         "model_config_id",
@@ -1207,6 +1888,7 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
         "model_family",
         "model_build",
         "model_type",
+        "ensemble_method",
         "mode",
         "feature_family_name",
         "feature_policy",
@@ -1216,6 +1898,7 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
         "mae",
         "rmse",
         "r2",
+        "r2_adjusted",
         "diracc",
         "selection_score",
         "mae_improvement_vs_naive",
@@ -1246,6 +1929,10 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
         wide["rmse"] = wide["overall_rmse"]
     if "overall_r2" in wide:
         wide["r2"] = wide["overall_r2"]
+    if "overall_r2_adjusted" in wide:
+        wide["r2_adjusted"] = wide["overall_r2_adjusted"]
+    elif "r2_adjusted" in metrics.columns:
+        wide["r2_adjusted"] = np.nan
     if "overall_diracc" in wide:
         wide["diracc"] = wide["overall_diracc"]
     if "overall_n_predictions" in wide:
@@ -1275,6 +1962,7 @@ def build_dashboard_outputs(
     metrics: pd.DataFrame,
     family_summary: pd.DataFrame,
     champion: dict,
+    complexity_profile: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     champion_predictions = predictions[predictions["config_id"] == champion["config_id"]].copy()
     forecast_paths = predictions[
@@ -1285,6 +1973,7 @@ def build_dashboard_outputs(
             "model_family",
             "model_build",
             "model_type",
+            "ensemble_method",
             "mode",
             "feature_family_name",
             "feature_policy",
@@ -1331,6 +2020,7 @@ def build_dashboard_outputs(
                 "model_family",
                 "model_build",
                 "model_type",
+                "ensemble_method",
                 "mode",
                 "feature_family_name",
                 "feature_policy",
@@ -1343,6 +2033,35 @@ def build_dashboard_outputs(
     )
 
     leaderboard = build_wide_leaderboard(metrics, config_details)
+    if complexity_profile is None:
+        complexity_profile = build_complexity_profile(model_runs, metrics)
+    if not complexity_profile.empty:
+        complexity_cols = [
+            "model_config_id",
+            "n_input_features",
+            "n_selected_features",
+            "feature_reduction_ratio",
+            "representation_policy",
+            "n_representation_features",
+            "sequence_length",
+            "prediction_head",
+            "validation_strategy",
+            "framework",
+            "hardware_type",
+            "device",
+            "model_size_proxy",
+            "complexity_score",
+            "interpretability_score",
+            "compute_score",
+            "aic_mean",
+            "bic_mean",
+        ]
+        available_complexity_cols = [col for col in complexity_cols if col in complexity_profile.columns]
+        leaderboard = leaderboard.merge(
+            complexity_profile[available_complexity_cols].drop_duplicates(subset=["model_config_id"]),
+            on="model_config_id",
+            how="left",
+        )
 
     overview_top_models = leaderboard.sort_values("selection_score").head(5).copy()
     overview_top_models["rank"] = np.arange(1, len(overview_top_models) + 1)
@@ -1363,6 +2082,7 @@ def build_dashboard_outputs(
         "champion_predictions.parquet": champion_predictions,
         "overview_top_models.parquet": overview_top_models,
         "overview_prediction_paths.parquet": overview_prediction_paths,
+        "complexity_profile.parquet": complexity_profile,
     }
 
 
@@ -1438,7 +2158,7 @@ def log_to_mlflow(
 
 
 def main() -> int:
-    args = parse_args()
+    args = apply_experiment_config(parse_args())
     artifacts = resolve_feature_artifacts(args)
 
     feature_table = read_parquet_uri(artifacts["feature_table_uri"])
@@ -1453,7 +2173,11 @@ def main() -> int:
             for name, columns in feature_families.items()
             if name in requested_families
         }
-    model_run_id = current_model_run_id(artifacts["feature_base_uri"])
+    model_run_id = (
+        args.experiment_config_payload.get("experiment_id")
+        if args.experiment_config_payload
+        else current_model_run_id(artifacts["feature_base_uri"])
+    )
     target_col = validate_feature_table(feature_table, args.target, args.horizon)
     evaluation_frame = build_evaluation_frame(
         feature_table,
@@ -1508,7 +2232,11 @@ def main() -> int:
         refit_frequency_months=args.refit_frequency_months,
         include_model_types=set(args.include_model_type) if args.include_model_type else None,
         feature_policies=args.feature_policy or ["none"],
+        model_grid=args.model_grid,
         n_jobs=args.n_jobs,
+        chunk_dir=args.chunk_dir,
+        checkpoint_dir=args.checkpoint_dir,
+        resume=args.resume,
     )
     if predictions.empty:
         raise ValueError("No predictions were produced. Check feature availability and min_train_rows.")
@@ -1516,7 +2244,15 @@ def main() -> int:
     metrics = calculate_metrics(predictions)
     family_summary = build_family_summary(metrics)
     champion = select_champion(metrics)
-    dashboard_outputs = build_dashboard_outputs(predictions, model_runs, metrics, family_summary, champion)
+    complexity_profile = build_complexity_profile(model_runs, metrics)
+    dashboard_outputs = build_dashboard_outputs(
+        predictions,
+        model_runs,
+        metrics,
+        family_summary,
+        champion,
+        complexity_profile=complexity_profile,
+    )
 
     write_parquet_uri(join_uri(results_base_uri, "predictions.parquet"), predictions)
     write_parquet_uri(join_uri(results_base_uri, "model_runs.parquet"), model_runs)
@@ -1524,6 +2260,7 @@ def main() -> int:
     write_parquet_uri(join_uri(results_base_uri, "feature_importance.parquet"), feature_importance)
     write_parquet_uri(join_uri(results_base_uri, "feature_sets.parquet"), feature_sets)
     write_parquet_uri(join_uri(results_base_uri, "feature_family_summary.parquet"), family_summary)
+    write_parquet_uri(join_uri(results_base_uri, "complexity_profile.parquet"), complexity_profile)
     write_json_uri(join_uri(results_base_uri, "champion_selection.json"), champion)
 
     manifest = {
@@ -1541,14 +2278,19 @@ def main() -> int:
         "models": sorted(set(metrics["model_type"])),
         "modes": sorted(set(metrics["mode"])),
         "feature_policies": sorted(set(metrics["feature_policy"])) if "feature_policy" in metrics else ["none"],
+        "experiment_config": args.experiment_config,
         "requested_feature_families": args.include_feature_family or "all",
         "requested_model_types": args.include_model_type or "all",
         "requested_feature_policies": args.feature_policy or ["none"],
         "n_jobs": int(args.n_jobs),
+        "chunk_dir": args.chunk_dir,
+        "checkpoint_dir": args.checkpoint_dir,
+        "resume": bool(args.resume),
         "feature_family_count": int(len(feature_families)),
         "prediction_count": int(len(predictions)),
         "model_run_count": int(len(model_runs)),
         "metric_count": int(len(metrics)),
+        "complexity_profile_count": int(len(complexity_profile)),
         "xgb_refresh_months": int(args.xgb_refresh_months),
         "refit_frequency_months": args.refit_frequency_months,
         "champion_config_id": champion["config_id"],

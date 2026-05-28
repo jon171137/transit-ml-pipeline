@@ -1,0 +1,62 @@
+experiment_id: phase_b_smoke
+
+inputs:
+  feature_table_uri: /private/tmp/feature_income_test/feature_table.parquet
+  feature_families_uri: /private/tmp/feature_income_test/feature_families.json
+
+outputs:
+  results_base_uri: /private/tmp/transit_phase_b_smoke/results
+  dashboard_base_uri: /private/tmp/transit_phase_b_smoke/dashboard
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: "2022-01-01"
+  as_of_end: "2022-06-01"
+  as_of_frequency_months: 1
+  min_train_rows: 72
+
+execution:
+  n_jobs: 1
+  checkpointing:
+    chunk_dir: /private/tmp/transit_phase_b_smoke/chunks
+    checkpoint_dir: /private/tmp/transit_phase_b_smoke/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    experiment_name: transit-forecasting-phase-b-smoke
+    run_name: phase_b_smoke
+
+models:
+  arima:
+    enabled: true
+    orders:
+      - [1, 1, 1]
+      - [2, 1, 1]
+    trends: ["n"]
+
+  sarima:
+    enabled: true
+    orders:
+      - [1, 1, 1]
+    seasonal_orders:
+      - [1, 0, 0, 12]
+    trends: ["n"]
+
+  sarimax:
+    enabled: true
+    orders:
+      - [1, 1, 1]
+    seasonal_orders:
+      - [1, 0, 0, 12]
+    trends: ["n"]
+    exog_sets:
+      service:
+        - vrm
+        - vrh
+      economic_lagged:
+        - seattle_gas_price_avg_lag1
+        - cpi_all_items_sa_lag1
+        - king_county_income_yoy_pct_prior_year

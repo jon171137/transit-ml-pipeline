@@ -15,6 +15,7 @@ try:
         PERIOD_METRIC_EXPLANATION,
         PERIOD_METRIC_SHORT_EXPLANATION,
         PROJECT_OVERVIEW,
+        REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
         SYSTEM_OVERVIEW,
     )
 except ImportError:
@@ -24,6 +25,7 @@ except ImportError:
         PERIOD_METRIC_EXPLANATION,
         PERIOD_METRIC_SHORT_EXPLANATION,
         PROJECT_OVERVIEW,
+        REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
         SYSTEM_OVERVIEW,
     )
 
@@ -50,6 +52,7 @@ RANK_METRIC_OPTIONS = {
     "MAE": ("mae", True),
     "RMSE": ("rmse", True),
     "R-squared": ("r2", False),
+    "Adjusted R-squared": ("r2_adjusted", False),
     "Directional accuracy": ("diracc", False),
     "Pre-COVID MAE": ("pre_covid_mae", True),
     "COVID shock MAE": ("covid_shock_mae", True),
@@ -664,6 +667,77 @@ def parse_json_display(value) -> str:
     return ", ".join(f"{key}={payload[key]}" for key in sorted(payload))
 
 
+def parse_json_payload(value) -> dict:
+    if pd.isna(value) or value in ("", "{}"):
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def shorthand_hyperparameters(value, max_items: int = 4) -> str:
+    aliases = {
+        "n_estimators": "n",
+        "max_depth": "depth",
+        "learning_rate": "lr",
+        "min_child_weight": "mcw",
+        "alpha": "alpha",
+        "l1_ratio": "l1",
+        "max_features": "max_feat",
+        "min_samples_leaf": "leaf",
+    }
+    payload = parse_json_payload(value)
+    if not payload:
+        return "params: none"
+    preferred_keys = [
+        "n_estimators",
+        "max_depth",
+        "learning_rate",
+        "min_child_weight",
+        "alpha",
+        "l1_ratio",
+        "max_features",
+        "min_samples_leaf",
+    ]
+    ordered_keys = [key for key in preferred_keys if key in payload]
+    ordered_keys.extend(sorted(key for key in payload if key not in ordered_keys))
+    parts = [
+        f"{aliases.get(key, key)}={payload[key]}"
+        for key in ordered_keys[:max_items]
+    ]
+    if len(ordered_keys) > max_items:
+        parts.append("...")
+    return ", ".join(parts)
+
+
+def selectbox_index(options: list[str], default_value) -> int:
+    if default_value is None:
+        return 0
+    default_text = str(default_value)
+    return options.index(default_text) if default_text in options else 0
+
+
+def ranked_model_label(row: pd.Series, metric_label: str) -> str:
+    metric_column, _ = RANK_METRIC_OPTIONS[metric_label]
+    metric_value = row.get(metric_column)
+    metric_fragment = (
+        f"{metric_label.lower()} {format_int(metric_value)}"
+        if pd.notna(metric_value)
+        else f"{metric_label.lower()} N/A"
+    )
+    params = shorthand_hyperparameters(row.get("hyperparameters_json", "{}"))
+    return (
+        f"#{int(row['rank'])} | {row.get('model_build', row.get('model_type', 'model'))} "
+        f"| {row.get('mode', '-')} | {row.get('feature_family_name', '-')} "
+        f"| {metric_fragment} | MAE {format_int(row.get('mae'))} "
+        f"| RMSE {format_int(row.get('rmse'))} | {params}"
+    )
+
+
 def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
     fig = go.Figure()
     if paths.empty:
@@ -790,6 +864,7 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         "mae",
         "rmse",
         "r2",
+        "r2_adjusted",
         "diracc",
         "selection_score",
         "pre_covid_mae",
@@ -799,6 +874,34 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         "shock_penalty",
         "recovery_ratio",
         "recent_recovery_ratio",
+    ]
+    available = [column for column in columns if column in display]
+    return display[available]
+
+
+def forecast_ranked_table(ranked_models: pd.DataFrame) -> pd.DataFrame:
+    display = ranked_models.copy()
+    if "hyperparameters_json" in display:
+        display["hyperparameters"] = display["hyperparameters_json"].apply(parse_json_display)
+    else:
+        display["hyperparameters"] = "N/A"
+    columns = [
+        "rank",
+        "model_build",
+        "mode",
+        "feature_family_name",
+        "feature_policy",
+        "hyperparameters",
+        "mae",
+        "rmse",
+        "r2",
+        "r2_adjusted",
+        "diracc",
+        "selection_score",
+        "pre_covid_mae",
+        "covid_shock_mae",
+        "recovery_mae",
+        "recent_mae",
     ]
     available = [column for column in columns if column in display]
     return display[available]
@@ -1054,47 +1157,120 @@ def main() -> None:
     with tab_forecast:
         st.subheader("Forecast Explorer")
         filter_cols = st.columns(6)
+        model_family_options = sorted(str(value) for value in leaderboard["model_family"].dropna().unique())
         model_family = filter_cols[0].selectbox(
             "Model family",
-            sorted(forecast_paths["model_family"].unique()),
+            model_family_options,
+            index=selectbox_index(model_family_options, champion.get("model_family")),
             key="forecast_model_family",
         )
-        family_scope = forecast_paths[forecast_paths["model_family"] == model_family]
+        family_scope = leaderboard[leaderboard["model_family"].astype(str) == model_family]
+        default_build = champion.get("model_build") if champion.get("model_family") == model_family else None
+        build_options = sorted(str(value) for value in family_scope["model_build"].dropna().unique())
         model_build = filter_cols[1].selectbox(
             "Model build",
-            sorted(family_scope["model_build"].unique()),
+            build_options,
+            index=selectbox_index(build_options, default_build),
             key="forecast_model_build",
         )
-        build_scope = family_scope[family_scope["model_build"] == model_build]
-        mode_options = sorted(build_scope["mode"].unique())
-        mode = filter_cols[2].selectbox("Mode", mode_options, key="forecast_mode")
-        family_options = sorted(
-            build_scope[build_scope["mode"] == mode]["feature_family_name"].unique()
+        build_scope = family_scope[family_scope["model_build"].astype(str) == model_build]
+        default_mode = (
+            champion.get("mode")
+            if champion.get("model_family") == model_family and champion.get("model_build") == model_build
+            else None
         )
-        family = filter_cols[3].selectbox("Feature family", family_options, key="forecast_feature_family")
+        mode_options = sorted(str(value) for value in build_scope["mode"].dropna().unique())
+        mode = filter_cols[2].selectbox(
+            "Mode",
+            mode_options,
+            index=selectbox_index(mode_options, default_mode),
+            key="forecast_mode",
+        )
+        mode_scope = build_scope[build_scope["mode"].astype(str) == mode]
+        default_family = (
+            champion.get("feature_family_name")
+            if champion.get("model_family") == model_family
+            and champion.get("model_build") == model_build
+            and champion.get("mode") == mode
+            else None
+        )
+        family_options = sorted(str(value) for value in mode_scope["feature_family_name"].dropna().unique())
+        family = filter_cols[3].selectbox(
+            "Feature family",
+            family_options,
+            index=selectbox_index(family_options, default_family),
+            key="forecast_feature_family",
+        )
         policy_scope = build_scope[
-            (build_scope["mode"] == mode)
-            & (build_scope["feature_family_name"] == family)
+            (build_scope["mode"].astype(str) == mode)
+            & (build_scope["feature_family_name"].astype(str) == family)
         ]
+        default_policy = (
+            champion.get("feature_policy", "none")
+            if champion.get("model_family") == model_family
+            and champion.get("model_build") == model_build
+            and champion.get("mode") == mode
+            and champion.get("feature_family_name") == family
+            else None
+        )
+        policy_options = sorted(str(value) for value in policy_scope["feature_policy"].dropna().unique())
         feature_policy = filter_cols[4].selectbox(
             "Feature policy",
-            sorted(policy_scope["feature_policy"].unique()),
+            policy_options,
+            index=selectbox_index(policy_options, default_policy),
             key="forecast_feature_policy",
         )
-        candidates = forecast_paths[
-            (forecast_paths["model_family"] == model_family)
-            & (forecast_paths["model_build"] == model_build)
-            & (forecast_paths["mode"] == mode)
-            & (forecast_paths["feature_family_name"] == family)
-            & (forecast_paths["feature_policy"] == feature_policy)
-        ].copy()
-        config_options = sorted(candidates["config_id"].unique())
-        default_config = champion.get("config_id") if champion.get("config_id") in config_options else config_options[0]
-        config_id = filter_cols[5].selectbox(
-            "Config",
-            config_options,
-            index=config_options.index(default_config),
+        forecast_rank_label = filter_cols[5].selectbox(
+            "Rank by",
+            available_rank_options(leaderboard),
+            key="forecast_metric",
         )
+        ranked_candidates = filtered_frame(
+            leaderboard,
+            model_family=model_family,
+            model_build=model_build,
+            mode=mode,
+            feature_family=family,
+            feature_policy=feature_policy,
+        )
+        ranked_candidates = sort_by_rank_metric(ranked_candidates, forecast_rank_label)
+        if ranked_candidates.empty:
+            st.info("No model configurations match the selected filters.")
+            return
+
+        selected_labels = [
+            ranked_model_label(row, forecast_rank_label)
+            for _, row in ranked_candidates.iterrows()
+        ]
+        label_by_config = dict(zip(ranked_candidates["config_id"], selected_labels))
+        default_config = (
+            champion.get("config_id")
+            if champion.get("config_id") in label_by_config
+            else ranked_candidates.iloc[0]["config_id"]
+        )
+        selected_label = st.selectbox(
+            "Selected ranked model",
+            selected_labels,
+            index=selected_labels.index(label_by_config[default_config]),
+            key="forecast_ranked_model",
+        )
+        label_to_config = dict(zip(selected_labels, ranked_candidates["config_id"]))
+        config_id = label_to_config[selected_label]
+        selected_model = ranked_candidates[ranked_candidates["config_id"] == config_id].iloc[0]
+        st.caption(
+            "Hyperparameters: "
+            f"{parse_json_display(selected_model.get('hyperparameters_json', '{}'))}. "
+            f"Ranked by {forecast_rank_label.lower()} within the active filters."
+        )
+
+        st.markdown("**Top matching ranked models**")
+        st.dataframe(
+            forecast_ranked_table(ranked_candidates.head(10)),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        candidates = forecast_paths[forecast_paths["config_id"] == config_id].copy()
         date_cols = st.columns([1, 1, 1, 1, 1])
         as_of_min, as_of_max = date_bounds(candidates, "as_of_date")
         target_min, target_max = date_bounds(candidates, "target_date")
@@ -1126,7 +1302,7 @@ def main() -> None:
             max_value=target_max.date(),
             key="forecast_target_end",
         )
-        selected_forecast = candidates[candidates["config_id"] == config_id].sort_values("target_date")
+        selected_forecast = candidates.sort_values("target_date")
         selected_forecast = apply_date_window(
             selected_forecast,
             "as_of_date",
@@ -1221,6 +1397,7 @@ def main() -> None:
             "mae",
             "rmse",
             "r2",
+            "r2_adjusted",
             "diracc",
             "selection_score",
             "pre_covid_mae",
@@ -1261,6 +1438,9 @@ def main() -> None:
 
         with st.expander("Period metrics and derived ratios"):
             st.markdown(PERIOD_METRIC_SHORT_EXPLANATION)
+
+        with st.expander("Feature policies, representations, and complexity scores"):
+            st.markdown(REPRESENTATION_AND_COMPLEXITY_EXPLANATION)
 
         st.subheader("Rolling Error Over Time")
         perf_date_cols = st.columns([1, 1, 2])

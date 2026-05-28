@@ -22,6 +22,7 @@ RESULT_TABLES = {
     "feature_importance": "feature_importance.parquet",
     "feature_sets": "feature_sets.parquet",
     "feature_family_summary": "feature_family_summary.parquet",
+    "complexity_profile": "complexity_profile.parquet",
 }
 
 DASHBOARD_EXPORTS = {
@@ -32,6 +33,7 @@ DASHBOARD_EXPORTS = {
     "champion_predictions": "champion_predictions.parquet",
     "overview_top_models": "overview_top_models.parquet",
     "overview_prediction_paths": "overview_prediction_paths.parquet",
+    "complexity_profile_dashboard": "complexity_profile.parquet",
 }
 
 JSON_ARTIFACTS = {
@@ -270,6 +272,21 @@ def create_dashboard_views(con: duckdb.DuckDBPyConnection) -> None:
             """
         )
 
+    if relation_exists(con, "source_dashboard_complexity_profile_dashboard"):
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW complexity_profile_dashboard AS
+            SELECT * FROM source_dashboard_complexity_profile_dashboard
+            """
+        )
+    elif relation_exists(con, "complexity_profile"):
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW complexity_profile_dashboard AS
+            SELECT * FROM complexity_profile
+            """
+        )
+
 
 def export_table_or_view(con: duckdb.DuckDBPyConnection, object_name: str, output_path: Path) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -366,6 +383,12 @@ def build_mart(
                 "overview_prediction_paths",
                 dashboard_export_dir / "overview_prediction_paths.parquet",
             )
+            if relation_exists(con, "complexity_profile_dashboard"):
+                export_counts["complexity_profile"] = export_table_or_view(
+                    con,
+                    "complexity_profile_dashboard",
+                    dashboard_export_dir / "complexity_profile.parquet",
+                )
             json_counts = copy_json_artifacts(results_dir, dashboard_dir, dashboard_export_dir)
             export_counts.update({f"json_{key}": value for key, value in json_counts.items()})
 

@@ -1,0 +1,103 @@
+experiment_id: phase_b_autoregressive_v1
+
+inputs:
+  feature_table_uri: /private/tmp/feature_income_test/feature_table.parquet
+  feature_families_uri: /private/tmp/feature_income_test/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_b_autoregressive_v1/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_b_autoregressive_v1
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: "2011-01-01"
+  as_of_end: "2025-12-01"
+  as_of_frequency_months: 1
+  min_train_rows: 72
+
+execution:
+  n_jobs: 4
+  checkpointing:
+    chunk_dir: experiments_output/phase_b_autoregressive_v1/chunks
+    checkpoint_dir: experiments_output/phase_b_autoregressive_v1/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: true
+    experiment_name: transit-forecasting-phase-b-autoregressive
+    run_name: phase_b_autoregressive_v1
+
+models:
+  arima:
+    enabled: true
+    orders:
+      - [0, 1, 1]
+      - [1, 0, 0]
+      - [1, 1, 0]
+      - [1, 1, 1]
+      - [1, 1, 2]
+      - [2, 0, 0]
+      - [2, 1, 0]
+      - [2, 1, 1]
+      - [2, 1, 2]
+      - [3, 0, 0]
+      - [3, 1, 1]
+      - [3, 1, 2]
+    trends: ["n", "c"]
+
+  sarima:
+    enabled: true
+    orders:
+      - [0, 1, 1]
+      - [1, 1, 0]
+      - [1, 1, 1]
+      - [2, 1, 1]
+      - [2, 1, 2]
+      - [3, 1, 1]
+    seasonal_orders:
+      - [1, 0, 0, 12]
+      - [0, 1, 1, 12]
+      - [1, 1, 0, 12]
+      - [1, 1, 1, 12]
+    trends: ["n"]
+
+  sarimax:
+    enabled: true
+    orders:
+      - [0, 1, 1]
+      - [1, 1, 1]
+      - [2, 1, 1]
+      - [2, 1, 2]
+      - [3, 1, 1]
+    seasonal_orders:
+      - [1, 0, 0, 12]
+      - [0, 1, 1, 12]
+      - [1, 1, 1, 12]
+    trends: ["n"]
+    exog_sets:
+      service:
+        - vrm
+        - vrh
+        - voms
+      economic_lagged:
+        - seattle_gas_price_avg_lag1
+        - seattle_gas_price_avg_yoy_diff
+        - cpi_all_items_sa_lag1
+        - cpi_all_items_sa_yoy_diff
+        - king_county_income_yoy_pct_prior_year
+        - king_county_income_2yr_pct_prior_year
+      income_pressure:
+        - king_county_income_yoy_pct_prior_year
+        - king_county_income_2yr_pct_prior_year
+        - gas_price_to_monthly_income
+        - income_yoy_pct_x_gas_price_yoy_diff
+        - income_yoy_pct_x_cpi_all_items_yoy_diff
+      service_economic:
+        - vrm
+        - vrh
+        - voms
+        - seattle_gas_price_avg_lag1
+        - cpi_all_items_sa_lag1
+        - king_county_income_yoy_pct_prior_year

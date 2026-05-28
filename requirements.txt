@@ -7,7 +7,9 @@ scikit-learn
 xgboost
 matplotlib
 python-dotenv
+PyYAML
 streamlit
 plotly
 mlflow
 duckdb
+statsmodels

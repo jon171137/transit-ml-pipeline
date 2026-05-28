@@ -249,6 +249,12 @@ baseline, emphasizing long-run stabilization rather than only crisis response.
 
 Lower values are better for MAE, RMSE, selection score, and the ratio metrics.
 Higher values are better for R2 and directional accuracy.
+
+Adjusted R2 is tracked where it is statistically meaningful, currently as a
+linear-model diagnostic. It penalizes added predictors, so it helps distinguish
+genuine explanatory improvement from feature count inflation. It is not used as
+the champion selection metric because the project is primarily judging forecast
+accuracy.
 """
 
 
@@ -270,4 +276,43 @@ This emphasizes whether the model has stabilized in the newer operating regime.
 
 Values near 1.0 mean the model's error was similar to its pre-COVID error.
 Values above 1.0 mean error increased relative to pre-COVID.
+"""
+
+
+REPRESENTATION_AND_COMPLEXITY_EXPLANATION = """
+`feature_family_name` describes the eligible columns before any model-specific
+selection step. This is the human-facing feature strategy: history-only,
+history plus regime flags, exogenous context, income pressure, targeted
+interactions, and so on.
+
+`feature_policy` describes a training-window-safe selection or pruning step
+applied after the feature family is chosen. Examples include correlation
+pruning, variance pruning, mutual-information selection, Lasso-based selection,
+and tree-importance selection. These policies are refit at each as-of month so
+they do not use future information.
+
+`representation_policy` is reserved for transforms that change the model input
+representation rather than merely selecting columns. Examples include
+`tabular_raw`, `pca_20`, `pca_95`, `sequence_raw`, `sequence_pca_20`, or a
+future learned latent representation. This is especially important for neural
+net and RNN-style experiments, where sequence length and compressed feature
+spaces become part of the model design.
+
+`complexity_score` is a normalized comparison score using selected feature
+count, a model-size proxy, and training time. It is useful for comparing models
+inside the same experiment, but it is not an absolute measure of complexity.
+
+`interpretability_score` is a heuristic readability score. Simpler baselines
+and linear models start higher; high feature counts, ensemble size, compressed
+representations, and neural architectures reduce the score because they are
+harder to explain cleanly.
+
+`compute_score` summarizes relative training burden from measured runtime. It
+helps separate models that are only slightly more accurate from models that are
+meaningfully more expensive to retrain.
+
+For future neural-net runs, `sequence_length`, `prediction_head`,
+`training_window_months`, `early_stopping_used`, `epochs_trained`, `best_epoch`,
+`framework`, `hardware_type`, `device`, `gpu_name`, and `cuda_version` make the
+same artifact shape work across CPU tabular models and GPU sequence models.
 """

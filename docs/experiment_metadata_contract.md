@@ -92,7 +92,28 @@ feature_policy
 feature_set_id
 hyperparameters_json
 n_features
+n_features_before_policy
+n_features_after_policy
 selected_feature_names_json
+dropped_feature_names_json
+feature_policy_params_json
+representation_policy
+representation_params_json
+n_representation_features
+sequence_length
+sequence_stride
+prediction_head
+training_window_months
+validation_strategy
+early_stopping_used
+epochs_trained
+best_epoch
+framework
+framework_version
+hardware_type
+device
+gpu_name
+cuda_version
 n_train
 model_refit
 train_seconds
@@ -111,13 +132,21 @@ Notes:
   valid for models without hyperparameters.
 - Interaction-expanded feature families should be represented as distinct
   `feature_family_name` values, not hidden inside the same baseline family.
-- Feature selection or dimensionality reduction choices should be captured in
-  `feature_policy` because those transforms must be fit within each as-of
-  training window to avoid look-ahead leakage.
+- Feature selection and pruning choices should be captured in `feature_policy`
+  because those transforms must be fit within each as-of training window to
+  avoid look-ahead leakage.
 - `selected_feature_names_json` records the post-policy feature list actually
   used by that model run. For `feature_policy = none`, it should match the
   feature family. For policies such as `corr_pruned`, it records the reduced
   training-window-safe set.
+- `representation_policy` captures transforms that change the input
+  representation rather than merely selecting columns. Examples include
+  `tabular_raw`, `pca_20`, `pca_95`, `sequence_raw`, `sequence_pca_20`, or a
+  future neural embedding. This keeps neural-net and dimensionality-reduction
+  experiments compatible with tabular model artifacts.
+- Runtime fields such as `hardware_type`, `device`, `gpu_name`, and
+  `cuda_version` are optional for CPU tabular runs, but should be populated for
+  GPU-backed neural-net runs so training cost and portability can be analyzed.
 
 ### `predictions.parquet`
 
@@ -186,6 +215,7 @@ n_features
 mae
 rmse
 r2
+r2_adjusted
 diracc
 mae_naive
 rmse_naive
@@ -201,6 +231,11 @@ total_train_seconds
 Notes:
 
 - `rank` is calculated within each `evaluation_scope`.
+- `r2` is ordinary coefficient of determination. `r2_adjusted` is nullable and
+  should be populated only when the adjustment is meaningful and the evaluation
+  group has enough observations relative to selected predictors. In the current
+  tabular runners, it is used as a linear-model diagnostic and is not part of
+  champion selection.
 - `metric_extras_json` can store model-family-specific values such as AIC/BIC,
   validation loss, coverage, or other diagnostics.
 
@@ -272,6 +307,76 @@ Notes:
   importance values.
 - Models without meaningful feature importance may omit rows.
 
+### `complexity_profile.parquet`
+
+One row per model configuration with the derived complexity, interpretability,
+and compute fields used by the dashboard.
+
+Required fields:
+
+```text
+experiment_id
+pipeline_run_id
+model_config_id
+config_id
+model_family
+model_build
+model_type
+ensemble_method
+mode
+feature_family_name
+feature_policy
+feature_set_id
+hyperparameters_json
+feature_policy_params_json
+representation_policy
+representation_params_json
+n_input_features
+n_selected_features
+feature_reduction_ratio
+n_representation_features
+sequence_length
+sequence_stride
+prediction_head
+training_window_months
+validation_strategy
+early_stopping_used
+epochs_trained
+best_epoch
+model_size_proxy
+complexity_score
+interpretability_score
+compute_score
+avg_train_seconds
+total_train_seconds
+model_run_count
+refit_count
+framework
+framework_version
+hardware_type
+device
+gpu_name
+cuda_version
+overall_mae
+overall_rmse
+overall_r2
+overall_r2_adjusted
+overall_selection_score
+```
+
+Notes:
+
+- `complexity_score` is a normalized within-experiment comparison based on
+  selected features, model-size proxy, and measured training time. It should not
+  be compared as an absolute value across unrelated experiments.
+- `interpretability_score` is a heuristic readability score, not a statistical
+  diagnostic. It is intended to support portfolio discussion about parsimony,
+  explainability, and operational simplicity.
+- AIC/BIC should be stored where the model family makes that meaningful, most
+  commonly autoregressive likelihood-based models. For tree and neural-net
+  models, size/runtime/validation diagnostics are more appropriate complexity
+  signals.
+
 ## Dashboard Export Artifacts
 
 The dashboard should read derived, presentation-shaped files rather than doing
@@ -289,6 +394,7 @@ feature_family_summary.parquet
 model_family_summary.parquet
 shock_recovery_summary.parquet
 feature_importance_summary.parquet
+complexity_profile.parquet
 ```
 
 The current streamlined AWS runner may continue writing its existing dashboard
@@ -310,6 +416,7 @@ metrics
 feature_sets
 feature_importance
 feature_family_summary
+complexity_profile
 ```
 
 Recommended dashboard views:
@@ -322,6 +429,7 @@ feature_family_summary_dashboard
 champion_predictions
 overview_top_models
 overview_prediction_paths
+complexity_profile_dashboard
 ```
 
 For the portfolio deployment, S3 should remain the durable artifact store. A

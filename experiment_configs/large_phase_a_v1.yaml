@@ -1,0 +1,340 @@
+experiment_id: large_phase_a_v1
+description: >
+  Phase A of the broad local experiment sweep. This phase focuses on tabular
+  forecasting approaches that can use the existing monthly feature table:
+  seasonal naive baseline, regularized linear models, and tree ensembles.
+
+status: draft
+
+inputs:
+  feature_table_uri: /private/tmp/feature_income_test/feature_table.parquet
+  feature_families_uri: /private/tmp/feature_income_test/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/large_phase_a_v1/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/large_phase_a_v1
+  duckdb_path: experiments_output/large_phase_a_v1/experiments.duckdb
+  dashboard_export_dir: dashboard_artifacts/aws_streamlined/large_phase_a_v1_from_duckdb
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  refit_frequency_months: 1
+  min_train_rows: 60
+
+execution:
+  n_jobs: 4
+  chunk_by:
+    - model_family
+    - model_build
+  checkpointing:
+    enabled: true
+    checkpoint_dir: experiments_output/large_phase_a_v1/checkpoints
+    chunk_dir: experiments_output/large_phase_a_v1/chunks
+    resume: true
+  random_seed: 42
+
+tracking:
+  mlflow:
+    enabled: true
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-large-phase-a
+    run_name: large_phase_a_v1
+    role: >
+      MLflow is the experiment tracker for run lineage, parameters, metrics,
+      and compact artifacts. Parquet/JSON artifacts and DuckDB remain the
+      dashboard source of truth.
+
+feature_families:
+  include:
+    - history_only
+    - history_recent
+    - history_rolls
+    - history_full
+    - history_regime
+    - history_regime_time
+    - history_regime_gas
+    - history_regime_cpi
+    - history_regime_service
+    - history_regime_gas_cpi
+    - history_regime_gas_service
+    - history_regime_cpi_service
+    - history_regime_all_exog
+    - history_regime_time_all_exog
+    - history_regime_linear_interactions
+    - history_regime_time_linear_interactions
+    - history_regime_exog_linear_interactions
+    - history_regime_all_exog_linear_interactions
+    - history_regime_income
+    - history_regime_income_pressure
+    - history_regime_income_linear_interactions
+
+modes:
+  baseline:
+    - raw
+  linear:
+    - raw
+    - residual
+  tree:
+    - raw
+    - residual
+
+feature_policies:
+  baseline:
+    - none
+  linear:
+    - none
+    - corr_pruned
+  tree:
+    - none
+
+models:
+  baseline:
+    seasonal_naive:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - {}
+
+  linear:
+    ridge:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 0.1
+        - alpha: 1.0
+        - alpha: 10.0
+        - alpha: 100.0
+
+    lasso:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 1.0
+          max_iter: 10000
+        - alpha: 10.0
+          max_iter: 10000
+        - alpha: 100.0
+          max_iter: 10000
+        - alpha: 1000.0
+          max_iter: 10000
+
+    elastic_net:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 0.1
+          l1_ratio: 0.25
+          max_iter: 10000
+        - alpha: 0.1
+          l1_ratio: 0.5
+          max_iter: 10000
+        - alpha: 1.0
+          l1_ratio: 0.25
+          max_iter: 10000
+        - alpha: 1.0
+          l1_ratio: 0.5
+          max_iter: 10000
+        - alpha: 10.0
+          l1_ratio: 0.25
+          max_iter: 10000
+        - alpha: 10.0
+          l1_ratio: 0.5
+          max_iter: 10000
+
+  tree:
+    random_forest:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - n_estimators: 300
+          max_depth: 4
+          min_samples_leaf: 3
+          max_features: sqrt
+        - n_estimators: 500
+          max_depth: 6
+          min_samples_leaf: 3
+          max_features: sqrt
+        - n_estimators: 500
+          max_depth: null
+          min_samples_leaf: 5
+          max_features: 0.7
+
+    extra_trees:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - n_estimators: 300
+          max_depth: 4
+          min_samples_leaf: 3
+          max_features: sqrt
+        - n_estimators: 500
+          max_depth: 6
+          min_samples_leaf: 3
+          max_features: sqrt
+        - n_estimators: 500
+          max_depth: null
+          min_samples_leaf: 5
+          max_features: 0.7
+
+    xgboost:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        # Conservative tree settings from the dashboard/medium-run iteration.
+        - n_estimators: 100
+          max_depth: 3
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 200
+          max_depth: 2
+          learning_rate: 0.03
+          subsample: 0.9
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 300
+          max_depth: 3
+          learning_rate: 0.03
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 5
+        - n_estimators: 200
+          max_depth: 4
+          learning_rate: 0.02
+          subsample: 0.8
+          colsample_bytree: 0.7
+          min_child_weight: 5
+        # Notebook-anchor settings from transit_integrated_modeling.ipynb.
+        # These preserve the stronger XGBoost search space used in the earlier
+        # fixed train/validation experiment while the runner evaluates them in
+        # the harder rolling as-of setup.
+        - n_estimators: 200
+          max_depth: 3
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 200
+          max_depth: 3
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 200
+          max_depth: 3
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 200
+          max_depth: 4
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 200
+          max_depth: 4
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 200
+          max_depth: 4
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 200
+          max_depth: 4
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 500
+          max_depth: 3
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 500
+          max_depth: 3
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 500
+          max_depth: 3
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 500
+          max_depth: 3
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 500
+          max_depth: 4
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 500
+          max_depth: 4
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+        - n_estimators: 500
+          max_depth: 4
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 1
+        - n_estimators: 500
+          max_depth: 4
+          learning_rate: 0.10
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 3
+
+metrics:
+  primary_selection_score: 0.75 * mae + 0.25 * rmse
+  champion_equivalence_threshold: 0.02
+  evaluation_scopes:
+    - overall
+    - pre_covid
+    - covid_shock
+    - recovery
+    - recent
+  additional_metrics_to_add:
+    - median_absolute_error
+    - max_absolute_error
+    - bias
+    - smape
+    - model_artifact_size_mb
+
+phase_b_placeholders:
+  autoregressive:
+    - arima
+    - sarima
+    - sarimax
+  note: >
+    Phase B should use a separate time-series-aware runner because ARIMA and
+    SARIMAX do not share the same training/feature mechanics as tabular models.
+
+phase_c_placeholders:
+  neural_net:
+    - mlp
+    - rnn
+    - gru
+    - lstm
+  note: >
+    Phase C should add sequence-window datasets, train/validation windows,
+    early stopping, learning-rate scheduling, and GPU-aware execution controls.

@@ -591,3 +591,224 @@
   seasonal-naive baseline cleanup.
 - Added a new ignored local planning snapshot:
   - `local_notes/project_snapshot_2026-05-27.md`
+
+## Medium Experiment V2
+
+- Reran the representative medium local experiment after the seasonal-naive
+  baseline cleanup.
+- Scope matched `medium_v1`:
+  - monthly as-of dates from `2016-01-01` through `2025-12-01`
+  - target dates from `2016-04-01` through `2026-03-01`
+  - models: seasonal naive, Ridge, Lasso, XGBoost
+  - feature policies: `none`, `corr_pruned`
+  - 8 representative feature families
+- Outputs:
+  - `145` model configurations
+  - `17,400` prediction rows
+  - `17,400` model-run rows
+  - `725` metric rows
+  - exactly `1` seasonal-naive leaderboard row
+- Built a DuckDB mart from `medium_v2`:
+  - `experiments_output/medium_v2/experiments.duckdb`
+- Exported dashboard-compatible artifacts from DuckDB:
+  - `dashboard_artifacts/aws_streamlined/medium_v2_from_duckdb`
+- Updated local dashboard `latest` artifacts to the DuckDB export:
+  - `dashboard_artifacts/aws_streamlined/latest`
+- Added `docs/medium_experiment_v2.md`.
+
+## Large Experiment Phase A Planning
+
+- Added draft Phase A config:
+  - `experiment_configs/large_phase_a_v1.yaml`
+- Added config-driven smoke config:
+  - `experiment_configs/phase_a_smoke.yaml`
+- Added a dry-run planner:
+  - `plan_large_experiment.py`
+- Added planning documentation:
+  - `docs/large_experiment_phase_a_plan.md`
+- Added `PyYAML` to `requirements.txt` for experiment config parsing.
+- Phase A draft scope:
+  - seasonal naive
+  - Ridge
+  - Lasso
+  - ElasticNet
+  - Random Forest
+  - Extra Trees
+  - XGBoost
+  - 21 income-aware feature families
+  - raw and residual modes where applicable
+  - `none` and `corr_pruned` feature policies for linear models
+- Planner output for the draft config:
+  - `180` monthly as-of origins
+  - `2,227` total model configurations after adding the notebook-aligned
+    XGBoost range
+  - `400,860` estimated model/as-of rows
+  - after runner updates, all listed Phase A model builds are implemented
+- Expanded the Phase A XGBoost grid to include the stronger parameter ranges
+  used in `transit_integrated_modeling.ipynb`: `n_estimators` 200/500,
+  `max_depth` 3/4, `learning_rate` .05/.10, and `min_child_weight` 1/3,
+  while retaining lower-learning-rate conservative settings.
+
+## Phase A Runner Preparation
+
+- Updated `run_aws_streamlined_models.py` to support:
+  - YAML experiment configs via `--experiment-config`
+  - ElasticNet
+  - RandomForestRegressor
+  - ExtraTreesRegressor
+  - per-model-configuration chunk outputs
+  - `--resume` reuse of completed chunks
+  - failed-configuration logging in the chunk directory
+  - `ensemble_method` metadata for bagging, randomized bagging, and boosting
+- Tree model internal parallelism is kept at `n_jobs=1` so outer
+  process-level parallelism remains the main concurrency control.
+- Config-driven smoke test passed:
+  - `37` model configurations
+  - `222` prediction rows
+  - `74` metric rows
+  - `37` leaderboard rows
+  - exactly `1` seasonal-naive leaderboard row
+- Resume behavior passed by rerunning the smoke config and reusing all `37`
+  completed chunks.
+- Smoke outputs loaded successfully through `build_experiment_mart.py` and
+  exported dashboard-compatible artifacts.
+
+## Large Experiment Phase A Completed
+
+- Ran the full `large_phase_a_v1` local experiment with:
+  - `2,227` model configurations
+  - `180` monthly as-of origins
+  - `400,860` predictions/model-as-of rows
+  - `11,135` metric rows
+  - `17,684,904` feature-importance rows
+  - no failed checkpoint files
+- MLflow created/logged experiment:
+  - `transit-forecasting-large-phase-a`
+- Built the DuckDB experiment mart:
+  - `experiments_output/large_phase_a_v1/experiments.duckdb`
+- Exported dashboard-compatible artifacts:
+  - `dashboard_artifacts/aws_streamlined/large_phase_a_v1_from_duckdb`
+- Updated local dashboard `latest` artifacts to the Phase A export bundle.
+- Phase A champion selected by the configured rule:
+  - model: `xgboost`
+  - mode: `raw`
+  - feature family: `history_regime_time`
+  - feature policy: `none`
+  - parameters: `n_estimators=500`, `max_depth=4`, `learning_rate=0.05`,
+    `subsample=0.8`, `colsample_bytree=0.8`, `min_child_weight=1`
+  - overall MAE: `340,381`
+  - overall RMSE: `670,718`
+  - overall R2: `0.874`
+  - selection score: `422,965`
+
+## Large Experiment Phase B Preparation
+
+- Added Phase B autoregressive experiment support:
+  - `run_autoregressive_models.py`
+  - `experiment_configs/phase_b_autoregressive_v1.yaml`
+  - `experiment_configs/phase_b_smoke.yaml`
+  - `docs/large_experiment_phase_b_plan.md`
+- Added `statsmodels` to `requirements.txt` for ARIMA/SARIMA/SARIMAX.
+- Updated `run_aws_streamlined_models.py` metadata helpers so
+  autoregressive model builds classify as `model_family=autoregressive`.
+- Updated `plan_large_experiment.py` so it can summarize Phase B config grids.
+- Added `combine_experiment_results.py` to merge Phase A and Phase B result
+  folders into one dashboard-compatible artifact set.
+- Phase B v1 planned scope:
+  - `99` autoregressive model configurations
+  - `180` monthly as-of origins
+  - `17,820` estimated model/as-of rows
+  - ARIMA, SARIMA, and SARIMAX builds
+  - SARIMAX service, economic, income-pressure, and service-economic exogenous
+    sets
+- Phase B smoke test passed:
+  - `5` autoregressive model configurations
+  - `30` prediction rows
+  - dashboard-compatible artifacts written under `/private/tmp/transit_phase_b_smoke`
+- Tested merge plumbing by combining Phase A results with the Phase B smoke
+  output and rebuilding a DuckDB/dashboard export under `/private/tmp`.
+
+## Large Experiment Phase B Completed
+
+- Ran the full `phase_b_autoregressive_v1` local experiment with:
+  - `99` autoregressive model configurations
+  - `180` monthly as-of origins
+  - `17,820` predictions/model-as-of rows
+  - `495` metric rows
+  - no failed checkpoint files
+- MLflow created/logged experiment:
+  - `transit-forecasting-phase-b-autoregressive`
+- Phase B champion selected by the configured rule:
+  - model: `sarimax`
+  - mode: `raw`
+  - exogenous family: `service`
+  - parameters: `order=(3,1,1)`, `seasonal_order=(1,0,0,12)`, `trend=n`
+  - overall MAE: `450,468`
+  - overall RMSE: `1,070,158`
+  - overall R2: `0.679`
+  - selection score: `605,391`
+- Combined Phase A and Phase B artifacts:
+  - `experiments_output/combined_phase_ab_v1/results`
+  - `dashboard_artifacts/aws_streamlined/combined_phase_ab_v1`
+- Built the combined DuckDB experiment mart:
+  - `experiments_output/combined_phase_ab_v1/experiments.duckdb`
+- Exported combined dashboard-compatible artifacts:
+  - `dashboard_artifacts/aws_streamlined/combined_phase_ab_v1_from_duckdb`
+- Updated local dashboard `latest` artifacts to the combined Phase A+B export:
+  - `dashboard_artifacts/aws_streamlined/latest`
+- Combined export summary:
+  - `418,680` prediction rows
+  - `11,630` metric rows
+  - `2,326` leaderboard rows
+  - model families present: baseline, linear, tree, autoregressive
+
+## Complexity and Representation Metadata Preparation
+
+- Added model-aware feature-policy support for the next Phase A rerun:
+  - `none`
+  - `corr_pruned`
+  - `variance_pruned`
+  - `mutual_info_top_20` / `mutual_info_top_30`
+  - `lasso_selected`
+  - `tree_top_20` / `tree_top_30`
+- Added `complexity_profile.parquet` to experiment results, DuckDB mart loads,
+  and dashboard exports.
+- Added complexity fields for model comparison:
+  - selected/input feature counts
+  - feature reduction ratio
+  - model size proxy
+  - complexity score
+  - interpretability score
+  - compute score
+- Added forward-compatible representation/runtime fields for future neural-net
+  and GPU-backed experiments:
+  - `representation_policy`
+  - `representation_params_json`
+  - `n_representation_features`
+  - `sequence_length`
+  - `sequence_stride`
+  - `prediction_head`
+  - `training_window_months`
+  - `validation_strategy`
+  - `early_stopping_used`
+  - `epochs_trained`
+  - `best_epoch`
+  - `framework`
+  - `framework_version`
+  - `hardware_type`
+  - `device`
+  - `gpu_name`
+  - `cuda_version`
+- Updated the dashboard definition copy with explanations for feature policies,
+  representation policies, and complexity scores.
+- Updated `docs/experiment_metadata_contract.md` for the expanded artifact
+  contract.
+- Added `experiment_configs/large_phase_a_v2_complexity.yaml` for the next
+  large Phase A rerun candidate.
+- Validated only the small smoke config, not the full large rerun:
+  - config: `experiment_configs/phase_a_policy_smoke.yaml`
+  - output: `/private/tmp/transit_phase_a_policy_smoke`
+  - `109` model configurations
+  - `654` prediction/model-as-of rows
+  - `109` complexity profile rows
+  - dashboard export includes representation and complexity columns
