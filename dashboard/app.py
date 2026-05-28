@@ -1,5 +1,6 @@
 import json
 import os
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +8,29 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    from content import (
+        DATA_OVERVIEW,
+        EXPERIMENT_OVERVIEW,
+        PERIOD_METRIC_EXPLANATION,
+        PERIOD_METRIC_SHORT_EXPLANATION,
+        PROJECT_OVERVIEW,
+        SYSTEM_OVERVIEW,
+    )
+except ImportError:
+    from dashboard.content import (
+        DATA_OVERVIEW,
+        EXPERIMENT_OVERVIEW,
+        PERIOD_METRIC_EXPLANATION,
+        PERIOD_METRIC_SHORT_EXPLANATION,
+        PROJECT_OVERVIEW,
+        SYSTEM_OVERVIEW,
+    )
+
 
 DEFAULT_ARTIFACT_DIR = Path("dashboard_artifacts/aws_streamlined/latest")
+IMAGE_ASSET_DIR = Path("dashboard/assets/images")
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 REQUIRED_FILES = {
     "forecast_paths": "forecast_paths.parquet",
     "performance_over_time": "performance_over_time.parquet",
@@ -38,12 +60,340 @@ RANK_METRIC_OPTIONS = {
     "Recent recovery ratio": ("recent_recovery_ratio", True),
 }
 
+PERIOD_RANK_WINDOWS = {
+    "Pre-COVID MAE": (None, "2020-02-01"),
+    "COVID shock MAE": ("2020-03-01", "2021-06-01"),
+    "Shock penalty": ("2020-03-01", "2021-06-01"),
+    "Recovery MAE": ("2021-07-01", "2022-12-01"),
+    "Recovery ratio": ("2021-07-01", "2022-12-01"),
+    "Recent MAE": ("2023-01-01", None),
+    "Recent recovery ratio": ("2023-01-01", None),
+}
+
 
 st.set_page_config(
     page_title="Transit Forecasting Lab",
     page_icon="",
     layout="wide",
 )
+
+
+def inject_site_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --portfolio-teal: #007f68;
+            --portfolio-teal-dark: #00614f;
+            --portfolio-blue: #075fed;
+            --portfolio-red: #e33f3f;
+            --portfolio-ink: #2f323a;
+            --portfolio-muted: #6b7280;
+            --portfolio-surface: #f7faf9;
+        }
+
+        .block-container {
+            padding-top: 1.6rem;
+        }
+
+        .portfolio-banner {
+            border-top: 7px solid var(--portfolio-teal);
+            background: linear-gradient(90deg, rgba(0, 127, 104, 0.11), rgba(7, 95, 237, 0.04));
+            border-bottom: 1px solid rgba(0, 127, 104, 0.16);
+            padding: 0.7rem 1rem;
+            margin: -0.2rem 0 1.4rem;
+            color: var(--portfolio-ink);
+            font-size: 0.92rem;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        .portfolio-banner span {
+            color: var(--portfolio-teal-dark);
+        }
+
+        h1, h2, h3 {
+            color: var(--portfolio-ink);
+            letter-spacing: 0;
+        }
+
+        [data-testid="stSidebar"] {
+            background: var(--portfolio-surface);
+            border-right: 1px solid rgba(0, 127, 104, 0.12);
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: var(--portfolio-teal-dark);
+        }
+
+        div[data-testid="stMetricValue"] {
+            color: var(--portfolio-ink);
+            font-size: 1.45rem;
+        }
+
+        div[data-testid="stMetricLabel"] {
+            color: var(--portfolio-muted);
+            font-size: 0.78rem;
+        }
+
+        .compact-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(130px, 1fr));
+            gap: 0.65rem;
+            margin: 0.85rem 0 0.75rem;
+        }
+
+        .compact-kpi {
+            border-top: 2px solid rgba(0, 127, 104, 0.35);
+            background: rgba(247, 250, 249, 0.7);
+            padding: 0.55rem 0.65rem;
+            min-height: 4rem;
+        }
+
+        .compact-kpi .label {
+            color: var(--portfolio-muted);
+            font-size: 0.73rem;
+            line-height: 1.15;
+            margin-bottom: 0.25rem;
+        }
+
+        .compact-kpi .value {
+            color: var(--portfolio-ink);
+            font-size: 1.08rem;
+            line-height: 1.2;
+            font-weight: 650;
+            overflow-wrap: anywhere;
+        }
+
+        .compact-context {
+            color: var(--portfolio-muted);
+            font-size: 0.82rem;
+            margin-bottom: 1.25rem;
+        }
+
+        @media (max-width: 1200px) {
+            .compact-kpi-grid {
+                grid-template-columns: repeat(2, minmax(130px, 1fr));
+            }
+        }
+
+        button[role="tab"][aria-selected="true"] {
+            color: var(--portfolio-teal-dark);
+            border-bottom-color: var(--portfolio-teal) !important;
+        }
+
+        button[kind="primary"],
+        div.stButton > button:first-child {
+            border-color: var(--portfolio-teal);
+        }
+
+        a {
+            color: var(--portfolio-blue);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_project_banner() -> None:
+    st.markdown(
+        """
+        <div class="portfolio-banner">
+            <span>Personal Forecasting Project</span> by Jon Sellers
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def display_name_from_path(path: Path) -> str:
+    return path.stem.replace("_", " ").replace("-", " ").strip().title()
+
+
+def discover_dashboard_images(image_dir: Path = IMAGE_ASSET_DIR) -> list[Path]:
+    if not image_dir.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in image_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+    )
+
+
+def render_image_gallery(title: str, intro: str = None) -> None:
+    images = discover_dashboard_images()
+    st.subheader(title)
+    if intro:
+        st.write(intro)
+
+    if not images:
+        st.info(
+            "Add PNG, JPG, JPEG, or WebP files to "
+            f"`{IMAGE_ASSET_DIR}` and they will appear here."
+        )
+        return
+
+    for image_path in images:
+        st.image(
+            str(image_path),
+            caption=display_name_from_path(image_path),
+            use_container_width=True,
+        )
+
+
+def compact_kpi(label: str, value) -> str:
+    return (
+        '<div class="compact-kpi">'
+        f'<div class="label">{escape(str(label))}</div>'
+        f'<div class="value">{escape(str(value))}</div>'
+        "</div>"
+    )
+
+
+def render_experiment_summary(
+    champion: dict,
+    forecast_paths: pd.DataFrame,
+    experiment_manifest: dict,
+) -> None:
+    items = [
+        ("Champion", champion.get("model_type", "-")),
+        ("Feature family", champion.get("feature_family_name", "-")),
+        ("Mode", champion.get("mode", "-")),
+        ("Selection score", format_int(champion.get("selection_score"))),
+        ("Champion MAE", format_int(champion.get("mae"))),
+        ("Champion RMSE", format_int(champion.get("rmse"))),
+        ("Predictions", format_int(len(forecast_paths))),
+        ("Target dates", date_range_label(forecast_paths, "target_date")),
+        ("As-of dates", date_range_label(forecast_paths, "as_of_date")),
+        (
+            "Horizon / cadence",
+            (
+                f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months"
+                f" / {months_label(manifest_value(experiment_manifest, 'as_of_frequency_months', month_interval_label(forecast_paths['as_of_date'])))}"
+            ),
+        ),
+    ]
+    st.markdown(
+        '<div class="compact-kpi-grid">' + "".join(compact_kpi(label, value) for label, value in items) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="compact-context">Each as-of month trains only on data before that month, '
+        "then forecasts the target horizon ahead. Aggregated metrics compare those rolling "
+        "historical forecasts with actual outcomes.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_data_page(
+    family_summary: pd.DataFrame,
+    leaderboard: pd.DataFrame,
+    forecast_paths: pd.DataFrame,
+    champion: dict,
+) -> None:
+    st.subheader("Data")
+    st.markdown(DATA_OVERVIEW)
+
+    st.markdown("### Source And Processing Map")
+    source_rows = [
+        {
+            "Source": "Transit monthly ridership and service",
+            "What it contributes": "Target ridership plus service/supply context.",
+            "Processing role": "Normalized to monthly grain, joined into the integrated base, then transformed into lags and rolling features.",
+        },
+        {
+            "Source": "EIA gasoline price series",
+            "What it contributes": "Transportation cost context.",
+            "Processing role": "Normalized monthly and used directly plus year-over-year/change features.",
+        },
+        {
+            "Source": "FRED CPI / inflation series",
+            "What it contributes": "General and core price-pressure context.",
+            "Processing role": "Normalized monthly, imputed when needed, then used as exogenous and interaction features.",
+        },
+        {
+            "Source": "FRED King County median household income",
+            "What it contributes": "Annual socioeconomic context.",
+            "Processing role": "Converted to prior-year monthly context with income-growth and affordability-pressure features.",
+        },
+    ]
+    st.dataframe(pd.DataFrame(source_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("### Feature Family Examples")
+    if {"feature_family_name", "best_selection_score"}.issubset(family_summary.columns):
+        family_display = family_summary.copy()
+        family_display = family_display.sort_values("best_selection_score").head(20)
+        st.dataframe(family_display, use_container_width=True, hide_index=True)
+    else:
+        family_cols = [col for col in ["feature_family_name", "mode"] if col in family_summary]
+        st.dataframe(family_summary[family_cols].drop_duplicates(), use_container_width=True, hide_index=True)
+
+    st.markdown("### Feature Types")
+    feature_type_rows = [
+        {
+            "Feature type": "Lagged ridership",
+            "Examples": "upt_lag1, upt_lag3, upt_lag12",
+            "Purpose": "Give models recent momentum and same-month-last-year context.",
+        },
+        {
+            "Feature type": "Rolling history",
+            "Examples": "rolling means, rolling changes, recent trend summaries",
+            "Purpose": "Smooth noisy month-to-month movement and expose trajectory.",
+        },
+        {
+            "Feature type": "Time and seasonality",
+            "Examples": "time_index_months, month_sin, month_cos, target_month_sin",
+            "Purpose": "Represent long-run trend and recurring calendar pattern.",
+        },
+        {
+            "Feature type": "Regime indicators",
+            "Examples": "is_covid_disruption, is_post_covid, months_since_covid_impact",
+            "Purpose": "Let models distinguish ordinary history from disruption and recovery periods.",
+        },
+        {
+            "Feature type": "Exogenous context",
+            "Examples": "gas price, CPI, core CPI, income growth",
+            "Purpose": "Test whether external economic pressure improves forecasts.",
+        },
+        {
+            "Feature type": "Targeted interactions",
+            "Examples": "income_yoy_pct_x_gas_price_yoy_diff, lag_x_regime flags",
+            "Purpose": "Let linear models express selected non-additive relationships without a full polynomial explosion.",
+        },
+    ]
+    st.dataframe(pd.DataFrame(feature_type_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("### Single Forecast Step Example")
+    config_id = champion.get("model_config_id") or champion.get("config_id")
+    sample = forecast_paths[forecast_paths["model_config_id"] == config_id].copy()
+    if sample.empty:
+        sample = forecast_paths.copy()
+    if not sample.empty:
+        sample = sample.sort_values("target_date").iloc[len(sample) // 2]
+        target_date = pd.Timestamp(sample["target_date"])
+        as_of_date = pd.Timestamp(sample["as_of_date"])
+        months_since_covid = (target_date.year - 2020) * 12 + (target_date.month - 3)
+        example_rows = [
+            ("as_of_date", as_of_date.date().isoformat(), "Training data is limited to rows before this month."),
+            ("target_date", target_date.date().isoformat(), "This is the month being forecast three months ahead."),
+            ("target_month", target_date.strftime("%B"), "Seasonality features encode this month cyclically."),
+            ("evaluation_period", sample.get("evaluation_period", "-"), "Used for pre-COVID, shock, recovery, and recent metrics."),
+            ("months_since_covid_impact", months_since_covid, "A time-since-disruption signal for regime-aware features."),
+            ("actual_upt", format_int(sample.get("actual")), "Observed ridership for the target month."),
+            ("prediction", format_int(sample.get("prediction")), "The selected model's forecast for that target month."),
+            ("seasonal_naive_prediction", format_int(sample.get("seasonal_naive_prediction")), "Same-month-last-year baseline used for comparison and residual mode."),
+            ("absolute_error", format_int(sample.get("abs_error")), "Distance between prediction and observed ridership."),
+        ]
+        st.dataframe(
+            pd.DataFrame(example_rows, columns=["Field", "Example value", "Interpretation"]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 @st.cache_data(show_spinner=False)
@@ -373,6 +723,56 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
     return fig
 
 
+def default_target_window_for_rank(
+    metric_label: str,
+    target_min: pd.Timestamp,
+    target_max: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start_raw, end_raw = PERIOD_RANK_WINDOWS.get(metric_label, (None, None))
+    start = max(target_min, pd.Timestamp(start_raw)) if start_raw else target_min
+    end = min(target_max, pd.Timestamp(end_raw)) if end_raw else target_max
+    if start > end:
+        return target_min, target_max
+    return start, end
+
+
+def select_distinct_model_paths(
+    ranked_models: pd.DataFrame,
+    paths: pd.DataFrame,
+    max_models: int = 5,
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    """Choose top models while avoiding visually identical prediction paths."""
+    selected_rows = []
+    selected_ids = []
+    signatures = set()
+    duplicate_count = 0
+
+    for _, row in ranked_models.iterrows():
+        config_id = row["model_config_id"]
+        path = paths[paths["model_config_id"] == config_id].sort_values("target_date")
+        if path.empty:
+            continue
+        signature = tuple(path["prediction"].round(3).tolist())
+        if signature in signatures:
+            duplicate_count += 1
+            continue
+        signatures.add(signature)
+        selected_rows.append(row)
+        selected_ids.append(config_id)
+        if len(selected_rows) >= max_models:
+            break
+
+    selected_models = pd.DataFrame(selected_rows)
+    selected_paths = paths[paths["model_config_id"].isin(selected_ids)].copy()
+    rank_lookup = {config_id: rank for rank, config_id in enumerate(selected_ids, start=1)}
+    if not selected_models.empty:
+        selected_models = selected_models.copy()
+        selected_models["rank"] = selected_models["model_config_id"].map(rank_lookup)
+    if not selected_paths.empty:
+        selected_paths["rank"] = selected_paths["model_config_id"].map(rank_lookup)
+    return selected_models, selected_paths, duplicate_count
+
+
 def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
     display = top_models.copy()
     if "hyperparameters_json" in display:
@@ -392,6 +792,10 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         "r2",
         "diracc",
         "selection_score",
+        "pre_covid_mae",
+        "covid_shock_mae",
+        "recovery_mae",
+        "recent_mae",
         "shock_penalty",
         "recovery_ratio",
         "recent_recovery_ratio",
@@ -412,6 +816,8 @@ def sort_by_rank_metric(df: pd.DataFrame, label: str) -> pd.DataFrame:
 
 
 def render_missing_artifacts(base_dir: Path) -> None:
+    inject_site_theme()
+    render_project_banner()
     st.title("Transit Forecasting Lab")
     st.info("Dashboard artifacts were not found yet.")
     st.write("Expected local artifact folder:")
@@ -423,6 +829,7 @@ def render_missing_artifacts(base_dir: Path) -> None:
 
 
 def main() -> None:
+    inject_site_theme()
     artifact_base = configured_artifact_dir()
     run_dirs = discover_run_dirs(artifact_base)
     if not run_dirs:
@@ -434,6 +841,16 @@ def main() -> None:
         "Dashboard artifact folder",
         run_dirs,
         format_func=lambda path: path.name if path.name != "latest" else str(path),
+    )
+    page = st.sidebar.radio(
+        "Section",
+        [
+            "Project Overview",
+            "System",
+            "Data",
+            "Experiment",
+            "Results Explorer",
+        ],
     )
 
     artifacts = load_artifacts(selected_dir)
@@ -468,48 +885,52 @@ def main() -> None:
         if "feature_policy" not in frame:
             frame["feature_policy"] = "none"
 
+    render_project_banner()
     st.title("Transit Forecasting Lab")
     st.caption("AWS streamlined model comparison for H3 UPT forecasts")
+    render_experiment_summary(champion, forecast_paths, experiment_manifest)
 
-    with st.container():
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Champion", champion.get("model_type", "-"))
-        col2.metric("Feature family", champion.get("feature_family_name", "-"))
-        col3.metric("Mode", champion.get("mode", "-"))
-        col4.metric("Selection score", format_int(champion.get("selection_score")))
+    if page == "Project Overview":
+        st.subheader("Project Overview")
+        st.markdown(PROJECT_OVERVIEW)
 
-        col5, col6, col7, col8 = st.columns(4)
-        col5.metric("Champion MAE", format_int(champion.get("mae")))
-        col6.metric("Champion RMSE", format_int(champion.get("rmse")))
-        col7.metric("Predictions", format_int(len(forecast_paths)))
-        col8.metric("Target dates", date_range_label(forecast_paths, "target_date"))
-
-        context_cols = st.columns(5)
-        context_cols[0].metric("As-of dates", date_range_label(forecast_paths, "as_of_date"))
-        context_cols[1].metric("Forecast horizon", f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months")
-        context_cols[2].metric(
-            "Forecast cadence",
-            months_label(
-                manifest_value(
-                    experiment_manifest,
-                    "as_of_frequency_months",
-                    month_interval_label(forecast_paths["as_of_date"]),
-                )
-            ),
+        overview_cols = st.columns(4)
+        overview_cols[0].metric(
+            "Forecast Horizon",
+            f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months",
         )
-        context_cols[3].metric(
-            "Refit cadence",
-            months_label(manifest_value(experiment_manifest, "refit_frequency_months", "-")),
-        )
-        context_cols[4].metric("Evaluation", manifest_value(experiment_manifest, "target", champion.get("target", "-")).upper())
-        st.caption(
-            "Each as-of month trains only on data before that month, then forecasts the target "
-            "horizon ahead. Aggregated metrics compare those rolling historical forecasts with actual outcomes."
-        )
+        overview_cols[1].metric("Model Configs", format_int(len(leaderboard)))
+        overview_cols[2].metric("Rolling Predictions", format_int(len(forecast_paths)))
+        overview_cols[3].metric("Target Window", date_range_label(forecast_paths, "target_date"))
+        return
 
-    tab_overview, tab_forecast, tab_performance, tab_features, tab_ops = st.tabs(
+    if page == "System":
+        st.subheader("System")
+        st.markdown(SYSTEM_OVERVIEW)
+        render_image_gallery(
+            "System Screenshots",
+            "Drop architecture sketches, AWS Step Functions captures, or other system screenshots here as the cloud side evolves.",
+        )
+        return
+
+    if page == "Data":
+        render_data_page(family_summary, leaderboard, forecast_paths, champion)
+        return
+
+    if page == "Experiment":
+        st.subheader("Experiment")
+        st.markdown(EXPERIMENT_OVERVIEW)
+        return
+
+    (
+        tab_modeling_overview,
+        tab_forecast,
+        tab_performance,
+        tab_features,
+        tab_ops,
+    ) = st.tabs(
         [
-            "Overview",
+            "Modeling Overview",
             "Forecast Explorer",
             "Model Performance",
             "Feature Strategy",
@@ -517,7 +938,7 @@ def main() -> None:
         ]
     )
 
-    with tab_overview:
+    with tab_modeling_overview:
         st.subheader("Top Models Against Actual Ridership")
         filter_cols = st.columns(6)
         selected_model_family = all_selectbox(
@@ -567,70 +988,68 @@ def main() -> None:
             feature_family=selected_feature_family,
             feature_policy=selected_feature_policy,
         )
+        metric = RANK_METRIC_OPTIONS[metric_label][0]
+        if metric in filtered_top:
+            filtered_top = sort_by_rank_metric(filtered_top, metric_label).copy()
+
+        candidate_configs = filtered_top["model_config_id"].tolist()
+        chart_paths = forecast_paths[forecast_paths["model_config_id"].isin(candidate_configs)].copy()
+        target_min, target_max = date_bounds(chart_paths if not chart_paths.empty else forecast_paths, "target_date")
+        default_target_start, default_target_end = default_target_window_for_rank(
+            metric_label,
+            target_min,
+            target_max,
+        )
         date_cols = st.columns([1, 1, 3])
-        target_min, target_max = date_bounds(forecast_paths, "target_date")
         overview_target_start = date_cols[0].date_input(
             "Target start",
-            target_min.date(),
+            default_target_start.date(),
             min_value=target_min.date(),
             max_value=target_max.date(),
-            key="overview_target_start",
+            key=f"overview_target_start_{metric_label}",
         )
         overview_target_end = date_cols[1].date_input(
             "Target end",
-            target_max.date(),
+            default_target_end.date(),
             min_value=target_min.date(),
             max_value=target_max.date(),
-            key="overview_target_end",
+            key=f"overview_target_end_{metric_label}",
         )
-        metric = RANK_METRIC_OPTIONS[metric_label][0]
-        if metric in filtered_top:
-            filtered_top = sort_by_rank_metric(filtered_top, metric_label).head(5).copy()
-
-        selected_configs = filtered_top["model_config_id"].tolist()
-        chart_paths = forecast_paths[forecast_paths["model_config_id"].isin(selected_configs)].copy()
-        chart_paths = apply_date_window(
+        windowed_paths = apply_date_window(
             chart_paths,
             "target_date",
             overview_target_start,
             overview_target_end,
         )
-        chart_paths = chart_paths.drop(columns=["rank"], errors="ignore").merge(
-            filtered_top[["model_config_id", "rank"]],
-            on="model_config_id",
-            how="left",
+        selected_models, chart_paths, duplicate_count = select_distinct_model_paths(
+            filtered_top,
+            windowed_paths,
+            max_models=5,
         )
         chart_paths = chart_paths.sort_values(["rank", "target_date"])
+
+        if metric_label in PERIOD_RANK_WINDOWS:
+            st.caption(
+                f"`{metric_label}` ranks models using a period-specific metric, so the chart "
+                "defaults to that target-date period. You can widen the dates manually."
+            )
+        if duplicate_count:
+            st.caption(
+                f"Skipped {duplicate_count} duplicate prediction path(s) so the chart shows distinct lines. "
+                "This commonly happens when seasonal-naive rows are repeated across feature-family labels."
+            )
 
         st.plotly_chart(
             top_model_chart(chart_paths, "Top Five Model Paths"),
             use_container_width=True,
         )
-        st.dataframe(overview_table(filtered_top), hide_index=True, use_container_width=True)
+        st.dataframe(overview_table(selected_models), hide_index=True, use_container_width=True)
 
         with st.expander("Champion selection rule"):
             st.write(champion.get("selection_rule", "No selection rule recorded."))
 
         with st.expander("How period-specific metrics are interpreted"):
-            st.markdown(
-                """
-                Metrics are calculated from target months, not training months. Each row asks:
-                if the model was trained at each historical as-of date, how accurate was its
-                3-month-ahead forecast for the target month?
-
-                `pre_covid` covers target months through February 2020.
-                `covid_shock` covers March 2020 through June 2021.
-                `recovery` covers July 2021 through December 2022.
-                `recent` covers January 2023 onward.
-
-                `shock_penalty = covid_shock_mae / pre_covid_mae`.
-                `recovery_ratio = recovery_mae / pre_covid_mae`.
-                `recent_recovery_ratio = recent_mae / pre_covid_mae`.
-
-                Lower values are better for MAE, RMSE, selection score, and the ratio metrics.
-                Higher values are better for R2 and directional accuracy.
-                """
-            )
+            st.markdown(PERIOD_METRIC_EXPLANATION)
 
     with tab_forecast:
         st.subheader("Forecast Explorer")
@@ -841,20 +1260,7 @@ def main() -> None:
             )
 
         with st.expander("Period metrics and derived ratios"):
-            st.markdown(
-                """
-                The leaderboard uses overall performance for the main rank, but it also includes
-                period-specific MAE columns. These are useful for finding models that were not
-                just accurate overall, but also resilient through disruption.
-
-                `shock_penalty` compares COVID shock MAE with pre-COVID MAE.
-                `recovery_ratio` compares recovery MAE with pre-COVID MAE.
-                `recent_recovery_ratio` compares recent MAE with pre-COVID MAE.
-
-                Values near 1.0 mean the model's error was similar to its pre-COVID error.
-                Values above 1.0 mean error increased relative to pre-COVID.
-                """
-            )
+            st.markdown(PERIOD_METRIC_SHORT_EXPLANATION)
 
         st.subheader("Rolling Error Over Time")
         perf_date_cols = st.columns([1, 1, 2])

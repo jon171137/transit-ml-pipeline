@@ -955,16 +955,38 @@ def run_model_comparison(
     requested_policies = feature_policies or ["none"]
 
     tasks = []
+    naive_configs = [config for config in configs if config["model_type"] == "naive"]
+    for config in naive_configs:
+        tasks.append(
+            {
+                "full_table": full_table,
+                "evaluation_frame": evaluation_frame,
+                "feature_cols": [],
+                "config": config,
+                "mode": "raw",
+                "feature_family_name": "baseline_naive",
+                "feature_policy": "none",
+                "experiment_id": experiment_id,
+                "pipeline_run_id": pipeline_run_id,
+                "target_col": target_col,
+                "target": target,
+                "horizon": horizon,
+                "min_train_rows": min_train_rows,
+                "xgb_refresh_months": xgb_refresh_months,
+                "refit_frequency_months": refit_frequency_months,
+            }
+        )
+
+    model_configs = [config for config in configs if config["model_type"] != "naive"]
     for feature_family_name in feature_families:
         feature_cols = eligible_feature_columns(feature_families, feature_family_name, full_table)
         if not feature_cols:
             logger.warning("Skipping feature family with no available columns: %s", feature_family_name)
             continue
 
-        for config in configs:
+        for config in model_configs:
             model_type = config["model_type"]
-            modes = ["raw"] if model_type == "naive" else MODEL_MODES
-            for mode in modes:
+            for mode in MODEL_MODES:
                 for requested_policy in requested_policies:
                     policy = effective_feature_policy(model_type, requested_policy)
                     if any(

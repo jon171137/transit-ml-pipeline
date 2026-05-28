@@ -247,6 +247,28 @@ python run_aws_streamlined_models.py \
 
 MLflow is used as an experiment tracker/lab notebook. The dashboard should continue reading curated Parquet/JSON artifacts rather than depending on a live MLflow server.
 
+## Experiment Mart
+
+Completed model-result artifacts can be loaded into a local DuckDB experiment
+mart for SQL analysis and dashboard export validation.
+
+```bash
+python build_experiment_mart.py \
+  --results-dir experiments_output/medium_v1/results \
+  --dashboard-dir dashboard_artifacts/aws_streamlined/medium_v1 \
+  --duckdb-path experiments_output/medium_v1/experiments.duckdb \
+  --dashboard-export-dir dashboard_artifacts/aws_streamlined/medium_v1_from_duckdb \
+  --replace
+```
+
+The mart contains raw experiment tables such as `predictions`, `model_runs`,
+`metrics`, `feature_sets`, and `feature_importance`, plus dashboard-shaped views
+such as `forecast_paths`, `model_leaderboard`, and `performance_over_time`.
+
+When an existing dashboard artifact folder is supplied, the builder preserves
+that presentation shape and exports compatible dashboard files. This keeps
+Streamlit working while adding a SQL layer for larger local experiment analysis.
+
 ## Run Context
 
 Step Functions passes these values into each ECS task:

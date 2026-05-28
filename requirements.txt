@@ -10,3 +10,4 @@ python-dotenv
 streamlit
 plotly
 mlflow
+duckdb

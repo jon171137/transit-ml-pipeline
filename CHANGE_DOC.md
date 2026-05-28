@@ -424,3 +424,156 @@
   rule selected the simpler non-interaction feature family because it was within
   the 2 percent equivalence band.
 - The run definition is documented in `docs/medium_experiment_v1.md`.
+
+## Dashboard Overview Ranking Fix
+
+- Investigated Overview chart behavior when ranking by period-specific metrics.
+- Findings:
+  - Pre-COVID ranking often selected multiple seasonal-naive configurations
+    with identical predictions because seasonal naive does not actually use
+    the attached feature-family labels.
+  - Recent-MAE ranking could select a model with strong recent performance but
+    extreme earlier-period predictions, which distorted the full-window chart.
+- Updated `dashboard/app.py`:
+  - period-specific ranking metrics now default the chart date window to the
+    matching target period
+  - duplicate prediction paths are skipped so the Top Five chart displays
+    distinct lines
+  - Overview tables now include period-specific MAE fields alongside overall
+    metrics and derived ratios
+
+## Seasonal Naive Baseline Cleanup
+
+- Updated `run_aws_streamlined_models.py` so seasonal naive is no longer crossed
+  with every feature family and feature policy.
+- Seasonal naive is now emitted once as:
+  - `model_family=baseline`
+  - `model_build=seasonal_naive`
+  - `feature_family_name=baseline_naive`
+  - `feature_policy=none`
+  - `mode=raw`
+- This keeps the baseline available for charts and improvement-vs-naive metrics
+  without polluting the leaderboard with identical duplicate prediction paths.
+- Smoke test passed:
+  - requested 3 feature families and 2 feature policies
+  - leaderboard contained exactly 1 seasonal-naive configuration
+  - forecast paths contained exactly 1 seasonal-naive config
+
+## Project Overview Page Draft
+
+- Added `dashboard/content.py` as a centralized place for reusable dashboard
+  narrative copy.
+- Moved period-metric explanation text out of inline Streamlit rendering blocks.
+- Added a new `Project Overview` tab describing:
+  - the forecasting-under-disruption motivation
+  - the AWS/local system split
+  - the rolling as-of-date experiment structure
+  - the dashboard's purpose for technical review
+- Renamed the original `Overview` tab to `Modeling Overview` to separate the
+  project narrative from the model-comparison page.
+
+## Dashboard Navigation Refactor
+
+- Moved the dashboard to a two-level navigation structure.
+- Sidebar sections now define the main project pages:
+  - `Project Overview`
+  - `System`
+  - `Data`
+  - `Experiment`
+  - `Results Explorer`
+- The existing analytical tabs now live under `Results Explorer`:
+  - `Modeling Overview`
+  - `Forecast Explorer`
+  - `Model Performance`
+  - `Feature Strategy`
+  - `Operational Footprint`
+- Added first-pass placeholder copy for `System`, `Data`, and `Experiment` in
+  `dashboard/content.py` so those pages can be iterated independently from the
+  results explorer.
+
+## Dashboard Visual Identity Pass
+
+- Added a light civic-style visual treatment inspired by the King County
+  reference palette without using official labels, icons, or branding.
+- Added a persistent page banner:
+  - `Personal Forecasting Project by Jon Sellers`
+- Added Streamlit theme overrides for:
+  - teal top accent
+  - blue link accents
+  - quieter sidebar surface
+  - tab and metric color polish
+
+## Dashboard Image Assets
+
+- Added `dashboard/assets/images/` for Streamlit-displayed project screenshots.
+- Added a reusable image gallery renderer in `dashboard/app.py`.
+- The `System` page now automatically displays supported images from that
+  folder.
+- Supported image types:
+  - `.png`
+  - `.jpg`
+  - `.jpeg`
+  - `.webp`
+
+## Data Page Draft And Compact Header
+
+- Reworked the persistent experiment summary header into a compact KPI strip so
+  static pages have more vertical room.
+- Expanded the `Data` page with:
+  - source and processing map
+  - feature family examples from the loaded artifact summary
+  - feature-type examples for lags, rolling features, time features, regime
+    indicators, exogenous context, and targeted interactions
+  - a single rolling forecast step example showing as-of date, target date,
+    evaluation period, model prediction, seasonal naive prediction, and error
+
+## Project Overview Copy Pass
+
+- Revised `Project Overview` language to read more like a polished portfolio
+  introduction.
+- Removed overly direct motivation language and reframed the project around why
+  monthly transit ridership is a useful forecasting case study:
+  - seasonality
+  - long-run trend
+  - operational context
+  - economic context
+  - COVID-era structural break
+- Expanded the page to connect modeling goals, system design, rolling as-of
+  evaluation, and the intended reviewer reading path.
+
+## Experiment Page Draft
+
+- Expanded the `Experiment` page from placeholder copy into a fuller first
+  draft covering:
+  - rolling historical as-of forecasting setup
+  - comparison dimensions for model family, model build, mode, feature family,
+    and feature policy
+  - leaderboard selection score and simplicity-aware champion rule
+  - period-specific metrics for pre-COVID, COVID shock, recovery, and recent
+    windows
+  - current medium-run scope versus the planned broader experiment
+  - reviewer-oriented questions to inspect beyond the top leaderboard row
+
+## DuckDB Experiment Mart
+
+- Added `build_experiment_mart.py`.
+- Added `duckdb` to `requirements.txt`.
+- The mart builder loads model-result artifacts into a local DuckDB file:
+  - `predictions`
+  - `model_runs`
+  - `metrics`
+  - `feature_importance`
+  - `feature_sets`
+  - `feature_family_summary`
+  - JSON manifest tables
+  - `experiment_runs`
+- The builder creates dashboard-shaped views and can export dashboard-ready
+  Parquet/JSON files.
+- Smoke test passed against `medium_v1`:
+  - DuckDB file: `experiments_output/medium_v1/experiments.duckdb`
+  - dashboard export: `dashboard_artifacts/aws_streamlined/medium_v1_from_duckdb`
+  - exported dashboard files matched original row counts and column order
+  - `model_leaderboard` preserved the wide period-metric columns needed by the
+    Streamlit dashboard
+- Updated `README.md` and `docs/experiment_metadata_contract.md` with the mart
+  workflow and deployment interpretation.

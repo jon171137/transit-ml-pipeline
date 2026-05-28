@@ -294,6 +294,40 @@ feature_importance_summary.parquet
 The current streamlined AWS runner may continue writing its existing dashboard
 files while we migrate toward these names.
 
+## DuckDB Experiment Mart
+
+The local experiment mart is a derived analytical layer built from the portable
+Parquet/JSON artifacts. It is not the source of truth; it is a query-optimized
+copy for local analysis and dashboard export validation.
+
+Recommended core tables:
+
+```text
+experiment_runs
+predictions
+model_runs
+metrics
+feature_sets
+feature_importance
+feature_family_summary
+```
+
+Recommended dashboard views:
+
+```text
+forecast_paths
+performance_over_time
+model_leaderboard
+feature_family_summary_dashboard
+champion_predictions
+overview_top_models
+overview_prediction_paths
+```
+
+For the portfolio deployment, S3 should remain the durable artifact store. A
+DuckDB file can be produced as a read-optimized derived artifact, then used to
+export the smaller Parquet/JSON files consumed by Streamlit.
+
 ## MLflow Usage
 
 MLflow should be optional and additive.
