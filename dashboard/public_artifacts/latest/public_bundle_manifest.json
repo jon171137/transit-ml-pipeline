@@ -1,0 +1,26 @@
+{
+  "forecast_rows": 342360,
+  "keep_fraction": 0.05,
+  "leaderboard_rows": 1902,
+  "output_dir": "dashboard/public_artifacts/latest",
+  "performance_rows": 342360,
+  "secondary_retention_metrics": false,
+  "selected_by_metric": {
+    "always_baseline": 1,
+    "always_champion": 1,
+    "covid_shock_mae": 362,
+    "mae": 362,
+    "pre_covid_mae": 362,
+    "r2": 362,
+    "r2_adjusted": 147,
+    "recent_mae": 363,
+    "recent_recovery_ratio": 362,
+    "recovery_mae": 362,
+    "recovery_ratio": 362,
+    "rmse": 362,
+    "selection_score": 362,
+    "shock_penalty": 362
+  },
+  "selected_configurations": 1902,
+  "source_configurations": 7240
+}

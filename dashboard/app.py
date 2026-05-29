@@ -30,9 +30,30 @@ except ImportError:
     )
 
 
-DEFAULT_ARTIFACT_DIR = Path("dashboard_artifacts/aws_streamlined/latest")
+DEFAULT_ARTIFACT_DIR = Path("dashboard/public_artifacts/latest")
 IMAGE_ASSET_DIR = Path("dashboard/assets/images")
+DEFAULT_FEATURE_FAMILIES_PATH = Path("dashboard/public_artifacts/latest/feature_families.json")
+PHASE_A_V2_CONFIG_PATH = Path("experiment_configs/large_phase_a_v2_complexity.yaml")
+PHASE_B_V2_CONFIG_PATH = Path("experiment_configs/phase_b_autoregressive_v2_complexity.yaml")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+MODEL_FAMILY_ORDER = ["baseline", "linear", "autoregressive", "tree", "neural_net", "neural"]
+MODEL_BUILD_ORDER = [
+    "seasonal_naive",
+    "ridge",
+    "lasso",
+    "elastic_net",
+    "arima",
+    "sarima",
+    "sarimax",
+    "random_forest",
+    "extra_trees",
+    "xgboost",
+    "mlp",
+    "cnn",
+    "rnn",
+    "gru",
+    "lstm",
+]
 REQUIRED_FILES = {
     "forecast_paths": "forecast_paths.parquet",
     "performance_over_time": "performance_over_time.parquet",
@@ -61,6 +82,17 @@ RANK_METRIC_OPTIONS = {
     "Shock penalty": ("shock_penalty", True),
     "Recovery ratio": ("recovery_ratio", True),
     "Recent recovery ratio": ("recent_recovery_ratio", True),
+}
+
+FEATURE_POLICY_DESCRIPTIONS = {
+    "none": "Use every column in the selected feature family.",
+    "corr_pruned": "Within each as-of training window, drop features that are highly correlated with earlier columns.",
+    "variance_pruned": "Within each as-of training window, drop near-constant features with almost no variance.",
+    "mutual_info_top_20": "Rank features by mutual information with the target inside the training window and keep the top 20.",
+    "mutual_info_top_30": "Rank features by mutual information with the target inside the training window and keep the top 30.",
+    "lasso_selected": "Fit a Lasso selector inside the training window and keep features with nonzero coefficients.",
+    "tree_top_20": "Fit a shallow Extra Trees selector inside the training window and keep the 20 most important features.",
+    "tree_top_30": "Fit a shallow Extra Trees selector inside the training window and keep the 30 most important features.",
 }
 
 PERIOD_RANK_WINDOWS = {
@@ -113,6 +145,23 @@ def inject_site_theme() -> None:
 
         .portfolio-banner span {
             color: var(--portfolio-teal-dark);
+        }
+
+        .portfolio-banner a {
+            color: var(--portfolio-ink);
+            text-decoration: none;
+            font-weight: 700;
+        }
+
+        .portfolio-banner a:hover {
+            color: var(--portfolio-blue);
+            text-decoration: underline;
+        }
+
+        .portfolio-banner .banner-link-divider {
+            color: var(--portfolio-muted);
+            margin: 0 0.35rem;
+            font-weight: 500;
         }
 
         h1, h2, h3 {
@@ -176,9 +225,69 @@ def inject_site_theme() -> None:
             margin-bottom: 1.25rem;
         }
 
+        .dashboard-hero {
+            display: grid;
+            grid-template-columns: minmax(300px, 1.1fr) minmax(360px, 0.9fr);
+            gap: 1.5rem;
+            align-items: start;
+            margin: 0.6rem 0 1.2rem;
+        }
+
+        .dashboard-title h1 {
+            margin: 0;
+            font-size: 2.35rem;
+            line-height: 1.08;
+        }
+
+        .dashboard-title p {
+            color: var(--portfolio-muted);
+            margin: 0.7rem 0 0;
+            font-size: 0.96rem;
+        }
+
+        .champion-summary {
+            border-top: 3px solid rgba(0, 127, 104, 0.45);
+            background: rgba(247, 250, 249, 0.75);
+            padding: 0.75rem 0.85rem;
+        }
+
+        .champion-summary .summary-title {
+            color: var(--portfolio-teal-dark);
+            font-size: 0.78rem;
+            font-weight: 750;
+            margin-bottom: 0.45rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .champion-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            column-gap: 0.9rem;
+            row-gap: 0.45rem;
+        }
+
+        .champion-summary .label {
+            color: var(--portfolio-muted);
+            font-size: 0.68rem;
+            line-height: 1.1;
+        }
+
+        .champion-summary .value {
+            color: var(--portfolio-ink);
+            font-size: 0.9rem;
+            line-height: 1.2;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
         @media (max-width: 1200px) {
             .compact-kpi-grid {
                 grid-template-columns: repeat(2, minmax(130px, 1fr));
+            }
+
+            .dashboard-hero {
+                grid-template-columns: 1fr;
             }
         }
 
@@ -205,7 +314,10 @@ def render_project_banner() -> None:
     st.markdown(
         """
         <div class="portfolio-banner">
-            <span>Personal Forecasting Project</span> by Jon Sellers
+            <span>Personal Forecasting Project</span> by
+            <a href="https://www.linkedin.com/in/sellersjon" target="_blank" rel="noopener noreferrer">Jon Sellers</a>
+            <span class="banner-link-divider">|</span>
+            <a href="https://github.com/jon171137/transit-ml-pipeline" target="_blank" rel="noopener noreferrer">GitHub Repo</a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -258,6 +370,57 @@ def compact_kpi(label: str, value) -> str:
     )
 
 
+def champion_summary_item(label: str, value) -> str:
+    return (
+        "<div>"
+        f'<div class="label">{escape(str(label))}</div>'
+        f'<div class="value">{escape(str(value))}</div>'
+        "</div>"
+    )
+
+
+def render_dashboard_header(
+    champion: dict,
+    forecast_paths: pd.DataFrame,
+    experiment_manifest: dict,
+) -> None:
+    horizon = manifest_value(experiment_manifest, "horizon", champion.get("horizon", "-"))
+    cadence = months_label(
+        manifest_value(
+            experiment_manifest,
+            "as_of_frequency_months",
+            month_interval_label(forecast_paths["as_of_date"]),
+        )
+    )
+    summary_items = [
+        ("Champion", champion.get("model_type", "-")),
+        ("Feature family", champion.get("feature_family_name", "-")),
+        ("Selection score", format_int(champion.get("selection_score"))),
+        ("MAE / RMSE", f"{format_int(champion.get('mae'))} / {format_int(champion.get('rmse'))}"),
+        ("Target dates", date_range_label(forecast_paths, "target_date")),
+        ("Horizon / cadence", f"{horizon} months / {cadence}"),
+    ]
+    st.markdown(
+        """
+        <div class="dashboard-hero">
+            <div class="dashboard-title">
+                <h1>Transit Forecasting Lab</h1>
+                <p>Rolling H3 UPT forecast comparison across local and AWS-shaped pipeline artifacts</p>
+            </div>
+            <div class="champion-summary">
+                <div class="summary-title">Current Champion Snapshot</div>
+                <div class="champion-summary-grid">
+        """
+        + "".join(champion_summary_item(label, value) for label, value in summary_items)
+        + """
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_experiment_summary(
     champion: dict,
     forecast_paths: pd.DataFrame,
@@ -298,6 +461,7 @@ def render_data_page(
     leaderboard: pd.DataFrame,
     forecast_paths: pd.DataFrame,
     champion: dict,
+    feature_families: dict,
 ) -> None:
     st.subheader("Data")
     st.markdown(DATA_OVERVIEW)
@@ -335,6 +499,47 @@ def render_data_page(
     else:
         family_cols = [col for col in ["feature_family_name", "mode"] if col in family_summary]
         st.dataframe(family_summary[family_cols].drop_duplicates(), use_container_width=True, hide_index=True)
+
+    st.markdown("### Feature Family Definitions")
+    st.write(
+        "These are the named feature families available to the Phase A tabular "
+        "models. A feature family is the human-readable modeling strategy before "
+        "any model-specific feature policy such as correlation pruning, mutual "
+        "information selection, or tree-importance selection is applied."
+    )
+    if feature_families:
+        family_rows = [
+            {
+                "feature_family_name": family_name,
+                "n_defined_features": len(features),
+                "included_features": ", ".join(features),
+            }
+            for family_name, features in sorted(feature_families.items())
+        ]
+        st.dataframe(pd.DataFrame(family_rows), use_container_width=True, hide_index=True)
+
+        selected_family = st.selectbox(
+            "Inspect one feature family",
+            sorted(feature_families),
+            index=0,
+            key="data_feature_family_definition_select",
+        )
+        selected_features = pd.DataFrame(
+            {
+                "position": range(1, len(feature_families[selected_family]) + 1),
+                "feature_name": feature_families[selected_family],
+            }
+        )
+        st.dataframe(selected_features, use_container_width=True, hide_index=True)
+
+        with st.expander("Show the feature family definition JSON"):
+            st.code(json.dumps(feature_families, indent=2), language="json")
+    else:
+        st.info(
+            "Feature family definitions were not found in this environment. "
+            "For local runs, the dashboard looks for "
+            f"`{DEFAULT_FEATURE_FAMILIES_PATH}` or the `FEATURE_FAMILIES_PATH` environment variable."
+        )
 
     st.markdown("### Feature Types")
     feature_type_rows = [
@@ -399,6 +604,133 @@ def render_data_page(
         )
 
 
+def render_experiment_page(
+    leaderboard: pd.DataFrame,
+    forecast_paths: pd.DataFrame,
+    performance: pd.DataFrame,
+    champion: dict,
+    experiment_manifest: dict,
+    phase_a_config_text: str,
+    phase_b_config_text: str,
+) -> None:
+    st.subheader("Experiment")
+
+    summary_rows = [
+        {
+            "Item": "Experiment bundle",
+            "Current value": experiment_manifest.get("experiment_id") or experiment_manifest.get("run_id") or "-",
+        },
+        {
+            "Item": "Target and horizon",
+            "Current value": (
+                f"{str(champion.get('target', experiment_manifest.get('target', 'upt'))).upper()}, "
+                f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', 3))} months ahead"
+            ),
+        },
+        {
+            "Item": "As-of window",
+            "Current value": date_range_label(forecast_paths, "as_of_date"),
+        },
+        {
+            "Item": "Target window",
+            "Current value": date_range_label(forecast_paths, "target_date"),
+        },
+        {
+            "Item": "Model configurations",
+            "Current value": format_int(len(leaderboard)),
+        },
+        {
+            "Item": "Rolling predictions",
+            "Current value": format_int(len(forecast_paths)),
+        },
+        {
+            "Item": "Metric rows",
+            "Current value": format_int(len(performance)),
+        },
+    ]
+    st.markdown("### Loaded Experiment Summary")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    model_scope = (
+        leaderboard.groupby(["model_family", "model_build"], dropna=False)
+        .size()
+        .reset_index(name="configurations")
+    )
+    model_scope = model_taxonomy_sort(model_scope)
+    st.markdown("### Model Scope In This Bundle")
+    st.dataframe(model_scope, use_container_width=True, hide_index=True)
+
+    st.markdown("### Feature Policies")
+    st.write(
+        "Feature families define the candidate inputs for a model. Feature "
+        "policies define what happens after that candidate set is chosen, such "
+        "as pruning correlated columns or selecting the strongest variables "
+        "inside each rolling as-of training window. Keeping these separate lets "
+        "the experiment compare feature ideas and model-specific input control "
+        "without mixing the two concepts."
+    )
+    if "feature_policy" in leaderboard.columns:
+        policy_scope = (
+            leaderboard.groupby("feature_policy", dropna=False)
+            .size()
+            .reset_index(name="configurations")
+            .sort_values(["feature_policy"])
+        )
+        policy_scope["meaning"] = policy_scope["feature_policy"].map(
+            lambda policy: FEATURE_POLICY_DESCRIPTIONS.get(
+                str(policy),
+                "Model-specific feature selection or pruning policy from the experiment config.",
+            )
+        )
+        policy_scope = policy_scope.rename(
+            columns={
+                "feature_policy": "Feature policy",
+                "configurations": "Configurations",
+                "meaning": "Meaning",
+            }
+        )
+        st.table(policy_scope)
+    with st.expander("How feature, representation, and complexity policies are interpreted"):
+        st.markdown(REPRESENTATION_AND_COMPLEXITY_EXPLANATION)
+
+    st.markdown("### Experiment Configs Used")
+    st.write(
+        "These YAML files define the model grids, feature families, feature "
+        "policies, rolling forecast window, parallelization settings, MLflow "
+        "tracking names, checkpoint locations, and output artifact folders used "
+        "for the current combined A/B v2 dashboard bundle."
+    )
+    config_rows = [
+        {
+            "Phase": "A v2",
+            "Config file": str(PHASE_A_V2_CONFIG_PATH),
+            "Role": "Baseline, linear, tree, and XGBoost grids over tabular feature families.",
+            "Loaded": "yes" if phase_a_config_text else "missing",
+        },
+        {
+            "Phase": "B v2",
+            "Config file": str(PHASE_B_V2_CONFIG_PATH),
+            "Role": "ARIMA, SARIMA, and SARIMAX grids with compact exogenous sets.",
+            "Loaded": "yes" if phase_b_config_text else "missing",
+        },
+    ]
+    st.dataframe(pd.DataFrame(config_rows), use_container_width=True, hide_index=True)
+
+    if phase_a_config_text:
+        with st.expander("Show Phase A v2 config YAML"):
+            st.code(phase_a_config_text, language="yaml")
+    else:
+        st.warning(f"Could not find `{PHASE_A_V2_CONFIG_PATH}`.")
+
+    if phase_b_config_text:
+        with st.expander("Show Phase B v2 config YAML"):
+            st.code(phase_b_config_text, language="yaml")
+    else:
+        st.warning(f"Could not find `{PHASE_B_V2_CONFIG_PATH}`.")
+
+    st.markdown(EXPERIMENT_OVERVIEW)
+
+
 @st.cache_data(show_spinner=False)
 def load_parquet(path: str, modified_ns: int) -> pd.DataFrame:
     _ = modified_ns
@@ -412,12 +744,23 @@ def load_json(path: str, modified_ns: int) -> dict:
         return json.load(file)
 
 
+@st.cache_data(show_spinner=False)
+def load_text(path: str, modified_ns: int) -> str:
+    _ = modified_ns
+    with open(path, "r", encoding="utf-8") as file:
+        return file.read()
+
+
 def file_modified_ns(path: Path) -> int:
     return path.stat().st_mtime_ns
 
 
 def configured_artifact_dir() -> Path:
     return Path(os.environ.get("DASHBOARD_ARTIFACT_DIR", DEFAULT_ARTIFACT_DIR))
+
+
+def configured_feature_families_path() -> Path:
+    return Path(os.environ.get("FEATURE_FAMILIES_PATH", DEFAULT_FEATURE_FAMILIES_PATH))
 
 
 def discover_run_dirs(base_dir: Path) -> list[Path]:
@@ -459,6 +802,19 @@ def load_artifacts(run_dir: Path) -> dict:
             else:
                 artifacts[artifact_name] = load_parquet(str(path), file_modified_ns(path))
     return artifacts
+
+
+def load_feature_family_definitions() -> dict:
+    path = configured_feature_families_path()
+    if not path.exists():
+        return {}
+    return load_json(str(path), file_modified_ns(path))
+
+
+def load_config_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return load_text(str(path), file_modified_ns(path))
 
 
 def format_int(value) -> str:
@@ -567,6 +923,39 @@ def month_interval_label(dates: pd.Series) -> str:
     return f"{interval} month" if interval == 1 else f"{interval} months"
 
 
+def order_index(value, ordered_values: list[str]) -> tuple[int, str]:
+    value_text = str(value)
+    try:
+        return ordered_values.index(value_text), value_text
+    except ValueError:
+        return len(ordered_values), value_text
+
+
+def ordered_unique(values: pd.Series, ordered_values=None) -> list[str]:
+    clean_values = [str(value) for value in values.dropna().unique()]
+    if not ordered_values:
+        return sorted(clean_values)
+    return sorted(clean_values, key=lambda value: order_index(value, ordered_values))
+
+
+def model_taxonomy_sort(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    out["_model_family_order"] = out["model_family"].map(
+        lambda value: order_index(value, MODEL_FAMILY_ORDER)[0]
+    ) if "model_family" in out else len(MODEL_FAMILY_ORDER)
+    out["_model_build_order"] = out["model_build"].map(
+        lambda value: order_index(value, MODEL_BUILD_ORDER)[0]
+    ) if "model_build" in out else len(MODEL_BUILD_ORDER)
+    sort_columns = [
+        column
+        for column in ["_model_family_order", "_model_build_order", "model_family", "model_build"]
+        if column in out.columns
+    ]
+    return out.sort_values(sort_columns).drop(columns=["_model_family_order", "_model_build_order"], errors="ignore")
+
+
 def manifest_value(manifest: dict, key: str, fallback="-") -> str:
     value = manifest.get(key)
     if value is None or value == "":
@@ -618,9 +1007,10 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
         xaxis_title="Target month",
         yaxis_title="UPT",
         hovermode="x unified",
-        legend_orientation="h",
-        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=50, b=95),
     )
+    fig.update_xaxes(title_standoff=18)
     return fig
 
 
@@ -645,7 +1035,12 @@ def rolling_error_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def all_selectbox(label: str, values: pd.Series, key: str, container=st) -> str:
-    clean_values = sorted(str(value) for value in values.dropna().unique())
+    if label == "Model family":
+        clean_values = ordered_unique(values, MODEL_FAMILY_ORDER)
+    elif label == "Model build":
+        clean_values = ordered_unique(values, MODEL_BUILD_ORDER)
+    else:
+        clean_values = ordered_unique(values)
     return container.selectbox(label, ["All"] + clean_values, key=key)
 
 
@@ -721,11 +1116,22 @@ def selectbox_index(options: list[str], default_value) -> int:
     return options.index(default_text) if default_text in options else 0
 
 
+def format_rank_metric_value(metric_label: str, value) -> str:
+    if pd.isna(value):
+        return "N/A"
+    metric_column, _ = RANK_METRIC_OPTIONS[metric_label]
+    if metric_column in {"r2", "r2_adjusted", "diracc"}:
+        return format_float(value, 4)
+    if metric_column in {"shock_penalty", "recovery_ratio", "recent_recovery_ratio"}:
+        return format_float(value, 3)
+    return format_int(value)
+
+
 def ranked_model_label(row: pd.Series, metric_label: str) -> str:
     metric_column, _ = RANK_METRIC_OPTIONS[metric_label]
     metric_value = row.get(metric_column)
     metric_fragment = (
-        f"{metric_label.lower()} {format_int(metric_value)}"
+        f"{metric_label.lower()} {format_rank_metric_value(metric_label, metric_value)}"
         if pd.notna(metric_value)
         else f"{metric_label.lower()} N/A"
     )
@@ -791,9 +1197,10 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
         xaxis_title="Target month",
         yaxis_title="UPT",
         hovermode="x unified",
-        legend_orientation="h",
-        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=50, b=95),
     )
+    fig.update_xaxes(title_standoff=18)
     return fig
 
 
@@ -968,6 +1375,9 @@ def main() -> None:
     champion_predictions = normalize_dates(artifacts["champion_predictions"], ["as_of_date", "target_date"])
     champion = artifacts["champion_selection"]
     experiment_manifest = artifacts.get("experiment_manifest", {})
+    feature_families = load_feature_family_definitions()
+    phase_a_config_text = load_config_text(PHASE_A_V2_CONFIG_PATH)
+    phase_b_config_text = load_config_text(PHASE_B_V2_CONFIG_PATH)
     overview_top_models = ensure_model_taxonomy(artifacts.get("overview_top_models", leaderboard.head(5).copy()))
     overview_prediction_paths = artifacts.get("overview_prediction_paths")
     if overview_prediction_paths is None:
@@ -989,9 +1399,7 @@ def main() -> None:
             frame["feature_policy"] = "none"
 
     render_project_banner()
-    st.title("Transit Forecasting Lab")
-    st.caption("AWS streamlined model comparison for H3 UPT forecasts")
-    render_experiment_summary(champion, forecast_paths, experiment_manifest)
+    render_dashboard_header(champion, forecast_paths, experiment_manifest)
 
     if page == "Project Overview":
         st.subheader("Project Overview")
@@ -1017,12 +1425,19 @@ def main() -> None:
         return
 
     if page == "Data":
-        render_data_page(family_summary, leaderboard, forecast_paths, champion)
+        render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
         return
 
     if page == "Experiment":
-        st.subheader("Experiment")
-        st.markdown(EXPERIMENT_OVERVIEW)
+        render_experiment_page(
+            leaderboard,
+            forecast_paths,
+            performance,
+            champion,
+            experiment_manifest,
+            phase_a_config_text,
+            phase_b_config_text,
+        )
         return
 
     (
@@ -1157,7 +1572,7 @@ def main() -> None:
     with tab_forecast:
         st.subheader("Forecast Explorer")
         filter_cols = st.columns(6)
-        model_family_options = sorted(str(value) for value in leaderboard["model_family"].dropna().unique())
+        model_family_options = ordered_unique(leaderboard["model_family"], MODEL_FAMILY_ORDER)
         model_family = filter_cols[0].selectbox(
             "Model family",
             model_family_options,
@@ -1166,7 +1581,7 @@ def main() -> None:
         )
         family_scope = leaderboard[leaderboard["model_family"].astype(str) == model_family]
         default_build = champion.get("model_build") if champion.get("model_family") == model_family else None
-        build_options = sorted(str(value) for value in family_scope["model_build"].dropna().unique())
+        build_options = ordered_unique(family_scope["model_build"], MODEL_BUILD_ORDER)
         model_build = filter_cols[1].selectbox(
             "Model build",
             build_options,
@@ -1487,6 +1902,10 @@ def main() -> None:
             x="model_build",
             y="best_metric",
             color="model_family",
+            category_orders={
+                "model_family": MODEL_FAMILY_ORDER,
+                "model_build": MODEL_BUILD_ORDER,
+            },
             labels={
                 "model_build": "Model build",
                 "model_family": "Model family",

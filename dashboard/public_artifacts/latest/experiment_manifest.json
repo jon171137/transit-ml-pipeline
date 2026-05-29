@@ -1,0 +1,74 @@
+{
+  "as_of_end": "2025-12-01",
+  "as_of_frequency_months": 1,
+  "as_of_start": "2011-01-01",
+  "champion_config_id": "xgboost__raw__history_regime_time__policy-mutual_info_top_30__colsample_bytree-0.8_learning_rate-0.05_max_depth-3_min_child_weight-1_n_estimators-500_subsample-0.8",
+  "created_at_utc": "2026-05-29T07:12:46.252478+00:00",
+  "experiment_id": "combined_phase_ab_v2_complexity",
+  "feature_policies": [
+    "corr_pruned",
+    "lasso_selected",
+    "mutual_info_top_30",
+    "none",
+    "tree_top_30",
+    "variance_pruned"
+  ],
+  "horizon": 3,
+  "metric_count": 36200,
+  "model_run_count": 1303200,
+  "models": [
+    "arima",
+    "elastic_net",
+    "extra_trees",
+    "lasso",
+    "naive",
+    "random_forest",
+    "ridge",
+    "sarima",
+    "sarimax",
+    "xgboost"
+  ],
+  "modes": [
+    "raw",
+    "residual"
+  ],
+  "prediction_count": 1303200,
+  "public_dashboard_bundle": {
+    "curation_rule": "Keep configurations in the best keep_fraction for core performance metrics, plus baseline and champion configurations.",
+    "keep_fraction": 0.05,
+    "secondary_retention_metrics": false,
+    "selected_by_metric": {
+      "always_baseline": 1,
+      "always_champion": 1,
+      "covid_shock_mae": 362,
+      "mae": 362,
+      "pre_covid_mae": 362,
+      "r2": 362,
+      "r2_adjusted": 147,
+      "recent_mae": 363,
+      "recent_recovery_ratio": 362,
+      "recovery_mae": 362,
+      "recovery_ratio": 362,
+      "rmse": 362,
+      "selection_score": 362,
+      "shock_penalty": 362
+    },
+    "selected_configurations": 1902,
+    "source_configurations": 7240,
+    "source_dir": "dashboard_artifacts/aws_streamlined/latest"
+  },
+  "run_id": "combined_phase_ab_v2_complexity",
+  "runtime": {
+    "compute_context": "local_combined"
+  },
+  "selection_rule": "Choose the simplest model within 2% of the best weighted score, where score = 0.75 * MAE + 0.25 * RMSE.",
+  "source_experiments": [
+    "large_phase_a_v2_complexity",
+    "phase_b_autoregressive_v2_complexity"
+  ],
+  "source_results_dirs": [
+    "experiments_output/large_phase_a_v2_complexity/results",
+    "experiments_output/phase_b_autoregressive_v2_complexity/results"
+  ],
+  "target": "upt"
+}

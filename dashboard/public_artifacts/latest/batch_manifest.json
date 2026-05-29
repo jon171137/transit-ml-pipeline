@@ -1,0 +1,50 @@
+{
+  "run_id": "combined_phase_ab_v2_complexity",
+  "experiment_id": "combined_phase_ab_v2_complexity",
+  "created_at_utc": "2026-05-29T07:12:46.252478+00:00",
+  "source_results_dirs": [
+    "experiments_output/large_phase_a_v2_complexity/results",
+    "experiments_output/phase_b_autoregressive_v2_complexity/results"
+  ],
+  "source_experiments": [
+    "large_phase_a_v2_complexity",
+    "phase_b_autoregressive_v2_complexity"
+  ],
+  "target": "upt",
+  "horizon": 3,
+  "as_of_start": "2011-01-01",
+  "as_of_end": "2025-12-01",
+  "as_of_frequency_months": 1,
+  "models": [
+    "arima",
+    "elastic_net",
+    "extra_trees",
+    "lasso",
+    "naive",
+    "random_forest",
+    "ridge",
+    "sarima",
+    "sarimax",
+    "xgboost"
+  ],
+  "modes": [
+    "raw",
+    "residual"
+  ],
+  "feature_policies": [
+    "corr_pruned",
+    "lasso_selected",
+    "mutual_info_top_30",
+    "none",
+    "tree_top_30",
+    "variance_pruned"
+  ],
+  "prediction_count": 1303200,
+  "model_run_count": 1303200,
+  "metric_count": 36200,
+  "champion_config_id": "xgboost__raw__history_regime_time__policy-mutual_info_top_30__colsample_bytree-0.8_learning_rate-0.05_max_depth-3_min_child_weight-1_n_estimators-500_subsample-0.8",
+  "selection_rule": "Choose the simplest model within 2% of the best weighted score, where score = 0.75 * MAE + 0.25 * RMSE.",
+  "runtime": {
+    "compute_context": "local_combined"
+  }
+}

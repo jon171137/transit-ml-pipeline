@@ -42,3 +42,8 @@ model_artifacts/
 mlruns/
 experiments_output/
 dashboard_artifacts/
+
+# Public, deployment-sized Streamlit artifact bundle
+dashboard/public_artifacts/*
+!dashboard/public_artifacts/latest/
+!dashboard/public_artifacts/latest/**

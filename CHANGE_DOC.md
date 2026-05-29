@@ -812,3 +812,52 @@
   - `654` prediction/model-as-of rows
   - `109` complexity profile rows
   - dashboard export includes representation and complexity columns
+
+## Phase A/B v2 Complexity Reruns
+
+- Ran the full Phase A v2 complexity experiment:
+  - config: `experiment_configs/large_phase_a_v2_complexity.yaml`
+  - output: `experiments_output/large_phase_a_v2_complexity/results`
+  - dashboard export: `dashboard_artifacts/aws_streamlined/large_phase_a_v2_complexity_from_duckdb`
+  - `7,141` model configurations
+  - `1,285,380` prediction/model-as-of rows
+  - no failed checkpoint files
+- Added and ran the Phase B v2 autoregressive complexity experiment:
+  - config: `experiment_configs/phase_b_autoregressive_v2_complexity.yaml`
+  - output: `experiments_output/phase_b_autoregressive_v2_complexity/results`
+  - dashboard export: `dashboard_artifacts/aws_streamlined/phase_b_autoregressive_v2_complexity_from_duckdb`
+  - `99` autoregressive model configurations
+  - `17,820` prediction/model-as-of rows
+- Updated `build_experiment_mart.py` so an empty autoregressive
+  `feature_importance.parquet` is loaded as an empty typed table instead of
+  failing DuckDB ingestion.
+- Combined Phase A v2 and Phase B v2 into one dashboard bundle:
+  - combined results: `experiments_output/combined_phase_ab_v2_complexity/results`
+  - combined DuckDB mart: `experiments_output/combined_phase_ab_v2_complexity/experiments.duckdb`
+  - combined dashboard export: `dashboard_artifacts/aws_streamlined/combined_phase_ab_v2_complexity_from_duckdb`
+  - local dashboard `latest` refreshed from the combined export
+  - `7,240` leaderboard/complexity rows
+  - `1,303,200` prediction/model-as-of rows
+  - model families present: baseline, linear, tree, autoregressive
+
+## Public Dashboard Deployment Prep
+
+- Added `build_public_dashboard_bundle.py` to create a smaller static dashboard
+  artifact bundle for Streamlit Community Cloud and similar lightweight hosts.
+- The public bundle defaults to keeping configurations that are in the best
+  5 percent for at least one core performance metric, plus baseline and
+  champion configurations.
+- Generated `dashboard/public_artifacts/latest` from the full combined Phase
+  A/B v2 dashboard export:
+  - full dashboard export: `83M`
+  - public dashboard bundle: `23M`
+  - retained model configurations: `1,902` of `7,240`
+  - retained forecast rows: `342,360`
+  - retained performance rows: `342,360`
+- Updated the dashboard default artifact path to use
+  `dashboard/public_artifacts/latest`, while preserving
+  `DASHBOARD_ARTIFACT_DIR` and `FEATURE_FAMILIES_PATH` overrides for local full
+  artifact exploration.
+- Added `requirements-dashboard.txt` and `dashboard/requirements.txt` with the
+  minimal dashboard runtime dependencies.
+- Added LinkedIn and GitHub links to the top dashboard banner.

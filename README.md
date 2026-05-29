@@ -92,6 +92,7 @@ wire into AWS when the next container/task-definition update is promoted.
 | `combine_experiment_results.py` | Combines compatible experiment result folders for mixed dashboard comparison |
 | `plan_large_experiment.py` | Expands experiment configs into pre-run count and scale summaries |
 | `build_experiment_mart.py` | Loads result artifacts into DuckDB and exports dashboard-compatible views |
+| `build_public_dashboard_bundle.py` | Creates a smaller static dashboard bundle for public Streamlit deployment |
 | `lambda_gas.py` | Local copy of gas ingestion Lambda |
 | `lambda_inflation.py` | Local copy of inflation ingestion Lambda |
 | `lambda_income.py` | Local copy of King County income ingestion Lambda |
@@ -206,6 +207,45 @@ dashboard/aws_streamlined/run_id=<run_id>/overview_top_models.parquet
 dashboard/aws_streamlined/run_id=<run_id>/overview_prediction_paths.parquet
 dashboard/aws_streamlined/run_id=<run_id>/complexity_profile.parquet
 ```
+
+## Public Dashboard Bundle
+
+The full local experiment export is intentionally larger than the public
+portfolio dashboard needs. For Streamlit Community Cloud or another lightweight
+host, the dashboard defaults to a curated static bundle at:
+
+```text
+dashboard/public_artifacts/latest/
+```
+
+Generate that bundle from the full dashboard export with:
+
+```bash
+python build_public_dashboard_bundle.py
+```
+
+The default public curation keeps configurations that rank in the best 5 percent
+for at least one core performance metric, plus the baseline and champion
+configurations. It keeps all forecast and performance rows for those retained
+configurations, so the dashboard remains interactive while avoiding the full
+local artifact size.
+
+The full local bundle can still be used by setting:
+
+```bash
+export DASHBOARD_ARTIFACT_DIR=dashboard_artifacts/aws_streamlined/latest
+export FEATURE_FAMILIES_PATH=feature_store/income_interactions_h3_v1/feature_families.json
+streamlit run dashboard/app.py
+```
+
+For a dashboard-only deployment, install the slim dashboard dependencies:
+
+```bash
+pip install -r requirements-dashboard.txt
+```
+
+The full project requirements remain in `requirements.txt` for data processing,
+modeling, MLflow, DuckDB, and AWS-oriented workflows.
 
 Champion selection uses a weighted score:
 

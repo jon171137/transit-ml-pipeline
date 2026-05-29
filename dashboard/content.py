@@ -22,7 +22,8 @@ reviewer could inspect performance over time.
 The pipeline ingests and normalizes several data sources, builds a monthly
 integrated feature table, creates feature families, trains forecasting models
 across repeated historical as-of dates, and publishes curated artifacts for this
-dashboard.
+dashboard. The current dashboard bundle combines Phase A tabular models with
+Phase B autoregressive models under the same rolling H3 UPT evaluation contract.
 
 The AWS version demonstrates a production-shaped workflow: containerized Python
 jobs, ECS tasks, Step Functions orchestration, S3 artifact storage, CloudWatch
@@ -62,15 +63,16 @@ time.
 
 ### Current Scope
 
-The current artifacts come from a medium-sized local experiment. They are useful
-for validating the dashboard and the metadata contract before the larger
-experiment run. The broader run will expand the model families, feature policies,
-and historical comparisons while keeping the same artifact shape.
+The current artifacts come from a larger local A/B experiment. Phase A covers
+baseline, regularized linear, bagging-style tree, randomized tree, and boosted
+tree models across income-aware feature families and model-specific feature
+policies. Phase B adds ARIMA, SARIMA, and SARIMAX configurations using compact
+service, economic, income-pressure, and service-economic exogenous sets.
 
-In other words, this version is already functional, but it is still the scaffold
-for the larger experiment. The next stage is to harden the local experiment
-store, run a broader model grid, and let the dashboard evolve from a prototype
-into a polished project narrative.
+The dashboard now reads a combined DuckDB-derived export that includes baseline,
+linear, tree, and autoregressive model families. The next major modeling stage
+is Phase C: neural-net and sequence-style models, likely run on a GPU-capable
+machine while preserving the same artifact contract.
 """
 
 
@@ -83,6 +85,11 @@ Python jobs run through ECS, Step Functions controls ordering and parallel
 normalization, S3 stores versioned artifacts, and CloudWatch captures operational
 logs.
 
+The local path handles broader experiments. The runners write portable
+Parquet/JSON artifacts, MLflow receives experiment tracking metadata, DuckDB
+builds a queryable analytical mart, and the dashboard reads a curated export
+rather than querying raw training outputs directly.
+
 ### Reasoning
 
 The goal is not to make AWS do every expensive experiment. The AWS pipeline
@@ -94,33 +101,43 @@ iteration speed matter more.
 
 Future versions can compare ECS jobs with Batch, Lambda for lighter ingestion,
 managed training jobs, or a fuller MLflow-backed registry. The current design is
-kept intentionally legible for a portfolio reviewer.
+kept intentionally legible for a portfolio reviewer: the cloud side proves
+orchestration, while the local side proves experiment breadth and artifact
+discipline.
 """
 
 
 DATA_OVERVIEW = """
 ### Primary EDA
 
-The core series is monthly transit ridership and service context. The data has
-seasonality, trend, and a visible COVID-era structural break, which makes it a
-useful forecasting case.
+The core series is monthly transit ridership and service context. The target in
+the current experiment is H3 UPT, forecast three months ahead from each rolling
+as-of month. The data has seasonality, trend, and a visible COVID-era structural
+break, which makes it a useful forecasting case.
 
 ### Secondary EDA
 
 External context includes gas prices, CPI/inflation, and King County median
-household income. These features are not assumed to be magic predictors; they
-create testable hypotheses about economic pressure and changing travel behavior.
+household income. Income is annual FRED data converted into prior-year monthly
+context, so each forecast month uses information that would have been known
+without borrowing from the future. These features are not assumed to be magic
+predictors; they create testable hypotheses about economic pressure and changing
+travel behavior.
 
 ### Calculated Features
 
 The feature table includes lags, rolling summaries, regime flags, exogenous
-signals, income pressure indicators, and targeted interaction terms.
+signals, income pressure indicators, and targeted interaction terms. The current
+stable feature snapshot contains income-aware families such as
+`history_regime_income`, `history_regime_income_pressure`, and
+`history_regime_income_linear_interactions`.
 
 ### Time-Based Features
 
 Time features represent month-of-year seasonality, long-run trend, target-month
-context, and COVID/recovery regimes. They support both direct models and
-residual models built around a seasonal naive baseline.
+context, and COVID/recovery regimes. They support direct raw forecasts, residual
+models built around a seasonal naive baseline, and time-series models that
+receive compact exogenous sets.
 """
 
 
@@ -138,20 +155,36 @@ family, and feature policy would have predicted as the ridership system moved
 through ordinary seasonal variation, COVID disruption, recovery, and the more
 recent operating period.
 
+### Current Experiment Blocks
+
+The current dashboard bundle combines two completed local experiment blocks:
+
+- Phase A: baseline, linear, and tree-based models over the monthly feature
+  table. This includes seasonal naive, Ridge, Lasso, Elastic Net, random forest,
+  Extra Trees, and XGBoost.
+- Phase B: autoregressive models using the same rolling as-of evaluation frame.
+  This includes ARIMA, SARIMA, and SARIMAX, with SARIMAX using compact service,
+  economic, income-pressure, and service-economic exogenous sets.
+
+Both phases are evaluated from the same as-of timeline and exported through the
+same artifact contract, so their forecasts can be compared in one dashboard
+without special-case logic.
+
 ### Comparison Dimensions
 
 The experiment compares several layers of modeling decisions:
 
-- `model_family`: broad modeling group such as baseline, linear, tree, and later
-  autoregressive or neural-net approaches.
+- `model_family`: broad modeling group such as baseline, linear, tree, and
+  autoregressive. Neural-net models are reserved for a later Phase C.
 - `model_build`: specific implementation such as seasonal naive, Ridge, Lasso,
-  XGBoost, or future ARIMA/LSTM-style variants.
+  XGBoost, ARIMA, SARIMA, or SARIMAX.
 - `mode`: raw/direct forecasts versus residual forecasts built around a
   seasonal naive baseline.
 - `feature_family_name`: different subsets of engineered features, from compact
   history-only sets to wider exogenous and interaction sets.
-- `feature_policy`: model-aware feature treatment such as no policy or
-  correlation pruning for linear models.
+- `feature_policy`: model-aware feature treatment such as no policy,
+  correlation pruning, variance pruning, mutual-information selection,
+  Lasso-based selection, or tree-importance selection.
 
 This structure lets the project ask more than "which model won?" It can compare
 whether simpler models are close enough, whether exogenous features help, whether
@@ -189,26 +222,28 @@ on average while still being fragile at the moment when robustness matters most.
 
 ### Primary Insights
 
-The current medium run is a dashboard-shaping artifact, not the final research
-sweep. It already supports comparisons across raw vs residual modeling, linear
-vs tree models, feature-family breadth, and period-specific shock/recovery
-metrics.
+The current run is large enough to support real comparison across model family,
+model build, feature family, feature policy, raw/residual mode, and
+period-specific shock/recovery behavior. It is still not the final research
+universe: neural-net models, deeper local sweeps, and any future target variants
+can be added later without changing the dashboard contract.
 
-Early results are useful for testing the shape of the system: the dashboard,
-metadata contract, feature-policy logic, and artifact format. They should be
-read as a working experimental slice, not the final claim about the best model.
+The early pattern is already useful. Strong tree models lead the combined
+leaderboard under the current selection rule, while SARIMAX provides a useful
+autoregressive comparison point with explicit time-series structure and AIC/BIC
+diagnostics stored in the raw run artifacts and complexity profile.
 
 ### Broader Experiment Scope
 
-The larger local run will expand model breadth and depth while preserving the
-same output contract. Planned directions include broader regularized linear
-specifications, tree ensembles, XGBoost grids, autoregressive variants, and
-neural-net time-series models.
+The larger local run will continue expanding breadth and depth while preserving
+the same output contract. Planned directions include revisiting Phase A feature
+policies if needed, adding Phase C neural-net time-series models, and moving GPU
+work to a desktop/Linux environment for sequence models.
 
 The key requirement for the broader run is checkpointed, queryable experiment
-storage. Once results are large enough, DuckDB or a similar local analytical
-store should sit between raw experiment artifacts and the dashboard so the UI can
-compare many runs without reading every Parquet file directly.
+storage. DuckDB now sits between raw experiment artifacts and the dashboard,
+letting the project preserve detailed Parquet outputs while publishing a curated
+static bundle for Streamlit.
 
 ### What To Look For
 
