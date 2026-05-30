@@ -68,20 +68,62 @@ OPTIONAL_FILES = {
     "experiment_manifest": "experiment_manifest.json",
 }
 
+SCORE_RECIPES = {
+    "typical": {"label": "Typical-error score", "mae_weight": 0.90, "rmse_weight": 0.10},
+    "balanced": {"label": "Balanced score", "mae_weight": 0.75, "rmse_weight": 0.25},
+    "large_error": {"label": "Large-error score", "mae_weight": 0.50, "rmse_weight": 0.50},
+}
+EVALUATION_PERIODS = {
+    "pre_covid": "Pre-COVID",
+    "covid_shock": "COVID shock",
+    "recovery": "Recovery",
+    "recent": "Recent",
+}
+
 RANK_METRIC_OPTIONS = {
-    "Selection score": ("selection_score", True),
+    "Balanced score": ("selection_score_balanced", True),
+    "Typical-error score": ("selection_score_typical", True),
+    "Large-error score": ("selection_score_large_error", True),
     "MAE": ("mae", True),
     "RMSE": ("rmse", True),
     "R-squared": ("r2", False),
     "Adjusted R-squared": ("r2_adjusted", False),
     "Directional accuracy": ("diracc", False),
     "Pre-COVID MAE": ("pre_covid_mae", True),
+    "Pre-COVID RMSE": ("pre_covid_rmse", True),
+    "Pre-COVID typical-error score": ("pre_covid_selection_score_typical", True),
+    "Pre-COVID balanced score": ("pre_covid_selection_score_balanced", True),
+    "Pre-COVID large-error score": ("pre_covid_selection_score_large_error", True),
     "COVID shock MAE": ("covid_shock_mae", True),
+    "COVID shock RMSE": ("covid_shock_rmse", True),
+    "COVID shock typical-error score": ("covid_shock_selection_score_typical", True),
+    "COVID shock balanced score": ("covid_shock_selection_score_balanced", True),
+    "COVID shock large-error score": ("covid_shock_selection_score_large_error", True),
     "Recovery MAE": ("recovery_mae", True),
+    "Recovery RMSE": ("recovery_rmse", True),
+    "Recovery typical-error score": ("recovery_selection_score_typical", True),
+    "Recovery balanced score": ("recovery_selection_score_balanced", True),
+    "Recovery large-error score": ("recovery_selection_score_large_error", True),
     "Recent MAE": ("recent_mae", True),
+    "Recent RMSE": ("recent_rmse", True),
+    "Recent typical-error score": ("recent_selection_score_typical", True),
+    "Recent balanced score": ("recent_selection_score_balanced", True),
+    "Recent large-error score": ("recent_selection_score_large_error", True),
     "Shock penalty": ("shock_penalty", True),
     "Recovery ratio": ("recovery_ratio", True),
     "Recent recovery ratio": ("recent_recovery_ratio", True),
+    "RMSE shock penalty": ("rmse_shock_penalty", True),
+    "RMSE recovery ratio": ("rmse_recovery_ratio", True),
+    "RMSE recent recovery ratio": ("rmse_recent_recovery_ratio", True),
+    "Typical score shock penalty": ("typical_score_shock_penalty", True),
+    "Typical score recovery ratio": ("typical_score_recovery_ratio", True),
+    "Typical score recent recovery ratio": ("typical_score_recent_recovery_ratio", True),
+    "Balanced score shock penalty": ("balanced_score_shock_penalty", True),
+    "Balanced score recovery ratio": ("balanced_score_recovery_ratio", True),
+    "Balanced score recent recovery ratio": ("balanced_score_recent_recovery_ratio", True),
+    "Large-error score shock penalty": ("large_error_score_shock_penalty", True),
+    "Large-error score recovery ratio": ("large_error_score_recovery_ratio", True),
+    "Large-error score recent recovery ratio": ("large_error_score_recent_recovery_ratio", True),
 }
 
 FEATURE_POLICY_DESCRIPTIONS = {
@@ -97,12 +139,40 @@ FEATURE_POLICY_DESCRIPTIONS = {
 
 PERIOD_RANK_WINDOWS = {
     "Pre-COVID MAE": (None, "2020-02-01"),
+    "Pre-COVID RMSE": (None, "2020-02-01"),
+    "Pre-COVID typical-error score": (None, "2020-02-01"),
+    "Pre-COVID balanced score": (None, "2020-02-01"),
+    "Pre-COVID large-error score": (None, "2020-02-01"),
     "COVID shock MAE": ("2020-03-01", "2021-06-01"),
+    "COVID shock RMSE": ("2020-03-01", "2021-06-01"),
+    "COVID shock typical-error score": ("2020-03-01", "2021-06-01"),
+    "COVID shock balanced score": ("2020-03-01", "2021-06-01"),
+    "COVID shock large-error score": ("2020-03-01", "2021-06-01"),
     "Shock penalty": ("2020-03-01", "2021-06-01"),
+    "RMSE shock penalty": ("2020-03-01", "2021-06-01"),
+    "Typical score shock penalty": ("2020-03-01", "2021-06-01"),
+    "Balanced score shock penalty": ("2020-03-01", "2021-06-01"),
+    "Large-error score shock penalty": ("2020-03-01", "2021-06-01"),
     "Recovery MAE": ("2021-07-01", "2022-12-01"),
+    "Recovery RMSE": ("2021-07-01", "2022-12-01"),
+    "Recovery typical-error score": ("2021-07-01", "2022-12-01"),
+    "Recovery balanced score": ("2021-07-01", "2022-12-01"),
+    "Recovery large-error score": ("2021-07-01", "2022-12-01"),
     "Recovery ratio": ("2021-07-01", "2022-12-01"),
+    "RMSE recovery ratio": ("2021-07-01", "2022-12-01"),
+    "Typical score recovery ratio": ("2021-07-01", "2022-12-01"),
+    "Balanced score recovery ratio": ("2021-07-01", "2022-12-01"),
+    "Large-error score recovery ratio": ("2021-07-01", "2022-12-01"),
     "Recent MAE": ("2023-01-01", None),
+    "Recent RMSE": ("2023-01-01", None),
+    "Recent typical-error score": ("2023-01-01", None),
+    "Recent balanced score": ("2023-01-01", None),
+    "Recent large-error score": ("2023-01-01", None),
     "Recent recovery ratio": ("2023-01-01", None),
+    "RMSE recent recovery ratio": ("2023-01-01", None),
+    "Typical score recent recovery ratio": ("2023-01-01", None),
+    "Balanced score recent recovery ratio": ("2023-01-01", None),
+    "Large-error score recent recovery ratio": ("2023-01-01", None),
 }
 
 
@@ -395,7 +465,7 @@ def render_dashboard_header(
     summary_items = [
         ("Champion", champion.get("model_type", "-")),
         ("Feature family", champion.get("feature_family_name", "-")),
-        ("Selection score", format_int(champion.get("selection_score"))),
+        ("Balanced score", format_int(champion.get("selection_score_balanced", champion.get("selection_score")))),
         ("MAE / RMSE", f"{format_int(champion.get('mae'))} / {format_int(champion.get('rmse'))}"),
         ("Target dates", date_range_label(forecast_paths, "target_date")),
         ("Horizon / cadence", f"{horizon} months / {cadence}"),
@@ -430,7 +500,7 @@ def render_experiment_summary(
         ("Champion", champion.get("model_type", "-")),
         ("Feature family", champion.get("feature_family_name", "-")),
         ("Mode", champion.get("mode", "-")),
-        ("Selection score", format_int(champion.get("selection_score"))),
+        ("Balanced score", format_int(champion.get("selection_score_balanced", champion.get("selection_score")))),
         ("Champion MAE", format_int(champion.get("mae"))),
         ("Champion RMSE", format_int(champion.get("rmse"))),
         ("Predictions", format_int(len(forecast_paths))),
@@ -453,6 +523,23 @@ def render_experiment_summary(
         "then forecasts the target horizon ahead. Aggregated metrics compare those rolling "
         "historical forecasts with actual outcomes.</div>",
         unsafe_allow_html=True,
+    )
+
+
+def render_public_bundle_note(experiment_manifest: dict) -> None:
+    bundle = experiment_manifest.get("public_dashboard_bundle")
+    if not bundle:
+        return
+    retained = format_int(bundle.get("selected_configurations"))
+    source = format_int(bundle.get("source_configurations"))
+    keep_fraction = bundle.get("keep_fraction")
+    keep_pct = f"{float(keep_fraction) * 100:.0f}%" if keep_fraction is not None else "configured"
+    st.info(
+        "This live dashboard uses a curated public artifact bundle for speed. "
+        f"It retains {retained} of {source} model configurations: models in the best "
+        f"{keep_pct} for at least one core performance metric, plus the baseline and "
+        "overall champion. The full local experiment output is preserved separately "
+        "for deeper analysis."
     )
 
 
@@ -614,6 +701,7 @@ def render_experiment_page(
     phase_b_config_text: str,
 ) -> None:
     st.subheader("Experiment")
+    render_public_bundle_note(experiment_manifest)
 
     summary_rows = [
         {
@@ -847,9 +935,11 @@ def normalize_dates(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 def model_family_for(model_type: str) -> str:
     if model_type == "naive":
         return "baseline"
-    if model_type in {"ridge", "lasso"}:
+    if model_type in {"ridge", "lasso", "elastic_net"}:
         return "linear"
-    if model_type == "xgboost":
+    if model_type in {"arima", "sarima", "sarimax"}:
+        return "autoregressive"
+    if model_type in {"random_forest", "extra_trees", "xgboost"}:
         return "tree"
     return "other"
 
@@ -867,6 +957,74 @@ def ensure_model_taxonomy(df: pd.DataFrame) -> pd.DataFrame:
             out["model_build"] = out["model_type"].map(model_build_for)
     if "model_config_id" not in out and "config_id" in out:
         out["model_config_id"] = out["config_id"]
+    return out
+
+
+def safe_ratio(numerator, denominator) -> float:
+    if pd.isna(numerator) or pd.isna(denominator) or denominator == 0:
+        return float("nan")
+    return float(numerator / denominator)
+
+
+def weighted_error_score(mae: pd.Series, rmse: pd.Series, recipe: dict) -> pd.Series:
+    return recipe["mae_weight"] * pd.to_numeric(mae, errors="coerce") + recipe["rmse_weight"] * pd.to_numeric(
+        rmse,
+        errors="coerce",
+    )
+
+
+def enrich_score_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add score variants and period ratios when older artifacts only have base metrics."""
+    out = df.copy()
+    if {"mae", "rmse"}.issubset(out.columns):
+        for recipe_name, recipe in SCORE_RECIPES.items():
+            out[f"selection_score_{recipe_name}"] = weighted_error_score(out["mae"], out["rmse"], recipe)
+        if "selection_score" not in out:
+            out["selection_score"] = out["selection_score_balanced"]
+
+    for period in EVALUATION_PERIODS:
+        mae_col = f"{period}_mae"
+        rmse_col = f"{period}_rmse"
+        if {mae_col, rmse_col}.issubset(out.columns):
+            for recipe_name, recipe in SCORE_RECIPES.items():
+                out[f"{period}_selection_score_{recipe_name}"] = weighted_error_score(
+                    out[mae_col],
+                    out[rmse_col],
+                    recipe,
+                )
+            legacy_col = f"{period}_selection_score"
+            if legacy_col not in out:
+                out[legacy_col] = out[f"{period}_selection_score_balanced"]
+
+    ratio_specs = {
+        "shock_penalty": ("covid_shock_mae", "pre_covid_mae"),
+        "recovery_ratio": ("recovery_mae", "pre_covid_mae"),
+        "recent_recovery_ratio": ("recent_mae", "pre_covid_mae"),
+        "rmse_shock_penalty": ("covid_shock_rmse", "pre_covid_rmse"),
+        "rmse_recovery_ratio": ("recovery_rmse", "pre_covid_rmse"),
+        "rmse_recent_recovery_ratio": ("recent_rmse", "pre_covid_rmse"),
+    }
+    for recipe_name in SCORE_RECIPES:
+        prefix = f"{recipe_name}_score"
+        ratio_specs[f"{prefix}_shock_penalty"] = (
+            f"covid_shock_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+        ratio_specs[f"{prefix}_recovery_ratio"] = (
+            f"recovery_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+        ratio_specs[f"{prefix}_recent_recovery_ratio"] = (
+            f"recent_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+
+    for output_col, (numerator_col, denominator_col) in ratio_specs.items():
+        if {numerator_col, denominator_col}.issubset(out.columns):
+            out[output_col] = [
+                safe_ratio(numerator, denominator)
+                for numerator, denominator in zip(out[numerator_col], out[denominator_col])
+            ]
     return out
 
 
@@ -1122,7 +1280,7 @@ def format_rank_metric_value(metric_label: str, value) -> str:
     metric_column, _ = RANK_METRIC_OPTIONS[metric_label]
     if metric_column in {"r2", "r2_adjusted", "diracc"}:
         return format_float(value, 4)
-    if metric_column in {"shock_penalty", "recovery_ratio", "recent_recovery_ratio"}:
+    if metric_column.endswith("_ratio") or metric_column.endswith("_penalty"):
         return format_float(value, 3)
     return format_int(value)
 
@@ -1274,13 +1432,44 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         "r2_adjusted",
         "diracc",
         "selection_score",
+        "selection_score_typical",
+        "selection_score_balanced",
+        "selection_score_large_error",
         "pre_covid_mae",
+        "pre_covid_rmse",
+        "pre_covid_selection_score_typical",
+        "pre_covid_selection_score_balanced",
+        "pre_covid_selection_score_large_error",
         "covid_shock_mae",
+        "covid_shock_rmse",
+        "covid_shock_selection_score_typical",
+        "covid_shock_selection_score_balanced",
+        "covid_shock_selection_score_large_error",
         "recovery_mae",
+        "recovery_rmse",
+        "recovery_selection_score_typical",
+        "recovery_selection_score_balanced",
+        "recovery_selection_score_large_error",
         "recent_mae",
+        "recent_rmse",
+        "recent_selection_score_typical",
+        "recent_selection_score_balanced",
+        "recent_selection_score_large_error",
         "shock_penalty",
+        "rmse_shock_penalty",
+        "typical_score_shock_penalty",
+        "balanced_score_shock_penalty",
+        "large_error_score_shock_penalty",
         "recovery_ratio",
+        "rmse_recovery_ratio",
+        "typical_score_recovery_ratio",
+        "balanced_score_recovery_ratio",
+        "large_error_score_recovery_ratio",
         "recent_recovery_ratio",
+        "rmse_recent_recovery_ratio",
+        "typical_score_recent_recovery_ratio",
+        "balanced_score_recent_recovery_ratio",
+        "large_error_score_recent_recovery_ratio",
     ]
     available = [column for column in columns if column in display]
     return display[available]
@@ -1305,10 +1494,29 @@ def forecast_ranked_table(ranked_models: pd.DataFrame) -> pd.DataFrame:
         "r2_adjusted",
         "diracc",
         "selection_score",
+        "selection_score_typical",
+        "selection_score_balanced",
+        "selection_score_large_error",
         "pre_covid_mae",
+        "pre_covid_rmse",
+        "pre_covid_selection_score_typical",
+        "pre_covid_selection_score_balanced",
+        "pre_covid_selection_score_large_error",
         "covid_shock_mae",
+        "covid_shock_rmse",
+        "covid_shock_selection_score_typical",
+        "covid_shock_selection_score_balanced",
+        "covid_shock_selection_score_large_error",
         "recovery_mae",
+        "recovery_rmse",
+        "recovery_selection_score_typical",
+        "recovery_selection_score_balanced",
+        "recovery_selection_score_large_error",
         "recent_mae",
+        "recent_rmse",
+        "recent_selection_score_typical",
+        "recent_selection_score_balanced",
+        "recent_selection_score_large_error",
     ]
     available = [column for column in columns if column in display]
     return display[available]
@@ -1323,6 +1531,153 @@ def sort_by_rank_metric(df: pd.DataFrame, label: str) -> pd.DataFrame:
     ranked = df.dropna(subset=[column]).sort_values(column, ascending=ascending).copy()
     ranked["rank"] = range(1, len(ranked) + 1)
     return ranked
+
+
+def metric_mapping_frame(
+    leaderboard: pd.DataFrame,
+    model_builds: list[str],
+    rank_label: str,
+    per_build_limit: str,
+) -> pd.DataFrame:
+    if not model_builds:
+        return leaderboard.iloc[0:0].copy()
+    frame = leaderboard[leaderboard["model_build"].astype(str).isin(model_builds)].copy()
+    if per_build_limit == "All":
+        return frame
+
+    limit = int(per_build_limit.replace("Top ", ""))
+    ranked_slices = []
+    for _, group in frame.groupby("model_build", sort=False):
+        ranked_slices.append(sort_by_rank_metric(group, rank_label).head(limit))
+    if not ranked_slices:
+        return frame.iloc[0:0].copy()
+    return pd.concat(ranked_slices, ignore_index=True)
+
+
+def aggregate_metric_mapping(frame: pd.DataFrame, x_metric: str, y_metric: str) -> pd.DataFrame:
+    x_col, _ = RANK_METRIC_OPTIONS[x_metric]
+    y_col, _ = RANK_METRIC_OPTIONS[y_metric]
+    group_cols = ["model_family", "model_build"]
+    optional_cols = [
+        "mae",
+        "rmse",
+        "r2",
+        "r2_adjusted",
+        "diracc",
+        "selection_score",
+        "selection_score_typical",
+        "selection_score_balanced",
+        "selection_score_large_error",
+        "shock_penalty",
+        "rmse_shock_penalty",
+        "typical_score_shock_penalty",
+        "balanced_score_shock_penalty",
+        "large_error_score_shock_penalty",
+        "recovery_ratio",
+        "rmse_recovery_ratio",
+        "typical_score_recovery_ratio",
+        "balanced_score_recovery_ratio",
+        "large_error_score_recovery_ratio",
+        "recent_recovery_ratio",
+        "rmse_recent_recovery_ratio",
+        "typical_score_recent_recovery_ratio",
+        "balanced_score_recent_recovery_ratio",
+        "large_error_score_recent_recovery_ratio",
+        "complexity_score",
+        "interpretability_score",
+        "compute_score",
+    ]
+    agg_cols = sorted({x_col, y_col, *[column for column in optional_cols if column in frame.columns]})
+    agg_spec = {column: (column, "mean") for column in agg_cols}
+    summary = frame.groupby(group_cols, as_index=False).agg(**agg_spec)
+    counts = frame.groupby(group_cols, as_index=False).size().rename(columns={"size": "configurations"})
+    summary = summary.merge(counts, on=group_cols, how="left")
+    summary["feature_family_name"] = "average of selected slice"
+    summary["feature_policy"] = "mixed"
+    return summary
+
+
+def metric_mapping_hover_columns(frame: pd.DataFrame) -> list[str]:
+    columns = [
+        "model_family",
+        "model_build",
+        "feature_family_name",
+        "feature_policy",
+        "mode",
+        "mae",
+        "rmse",
+        "r2",
+        "r2_adjusted",
+        "diracc",
+        "selection_score",
+        "selection_score_typical",
+        "selection_score_balanced",
+        "selection_score_large_error",
+        "shock_penalty",
+        "rmse_shock_penalty",
+        "typical_score_shock_penalty",
+        "balanced_score_shock_penalty",
+        "large_error_score_shock_penalty",
+        "recovery_ratio",
+        "rmse_recovery_ratio",
+        "typical_score_recovery_ratio",
+        "balanced_score_recovery_ratio",
+        "large_error_score_recovery_ratio",
+        "recent_recovery_ratio",
+        "rmse_recent_recovery_ratio",
+        "typical_score_recent_recovery_ratio",
+        "balanced_score_recent_recovery_ratio",
+        "large_error_score_recent_recovery_ratio",
+        "complexity_score",
+        "interpretability_score",
+        "compute_score",
+        "configurations",
+    ]
+    return [column for column in columns if column in frame.columns]
+
+
+def metric_mapping_chart(
+    frame: pd.DataFrame,
+    x_metric: str,
+    y_metric: str,
+    color_by: str,
+    aggregate_points: bool,
+) -> go.Figure:
+    x_col, _ = RANK_METRIC_OPTIONS[x_metric]
+    y_col, _ = RANK_METRIC_OPTIONS[y_metric]
+    plot_frame = frame.dropna(subset=[x_col, y_col]).copy()
+    if plot_frame.empty:
+        fig = go.Figure()
+        fig.update_layout(title="No matching metric points")
+        return fig
+
+    size_col = "configurations" if aggregate_points and "configurations" in plot_frame.columns else None
+    fig = px.scatter(
+        plot_frame,
+        x=x_col,
+        y=y_col,
+        color=color_by if color_by in plot_frame.columns else "model_build",
+        size=size_col,
+        hover_data=metric_mapping_hover_columns(plot_frame),
+        category_orders={
+            "model_family": MODEL_FAMILY_ORDER,
+            "model_build": MODEL_BUILD_ORDER,
+        },
+        labels={
+            x_col: x_metric,
+            y_col: y_metric,
+            "model_family": "Model family",
+            "model_build": "Model build",
+            "feature_policy": "Feature policy",
+        },
+    )
+    fig.update_traces(marker=dict(opacity=0.78, line=dict(width=0.5, color="white")))
+    fig.update_layout(
+        title=f"{y_metric} vs {x_metric}",
+        hovermode="closest",
+        margin=dict(l=10, r=10, t=50, b=40),
+    )
+    return fig
 
 
 def render_missing_artifacts(base_dir: Path) -> None:
@@ -1370,7 +1725,7 @@ def main() -> None:
     performance = ensure_model_taxonomy(
         normalize_dates(artifacts["performance_over_time"], ["as_of_date", "target_date"])
     )
-    leaderboard = ensure_model_taxonomy(artifacts["model_leaderboard"])
+    leaderboard = enrich_score_columns(ensure_model_taxonomy(artifacts["model_leaderboard"]))
     family_summary = artifacts["feature_family_summary"].copy()
     champion_predictions = normalize_dates(artifacts["champion_predictions"], ["as_of_date", "target_date"])
     champion = artifacts["champion_selection"]
@@ -1378,7 +1733,9 @@ def main() -> None:
     feature_families = load_feature_family_definitions()
     phase_a_config_text = load_config_text(PHASE_A_V2_CONFIG_PATH)
     phase_b_config_text = load_config_text(PHASE_B_V2_CONFIG_PATH)
-    overview_top_models = ensure_model_taxonomy(artifacts.get("overview_top_models", leaderboard.head(5).copy()))
+    overview_top_models = enrich_score_columns(
+        ensure_model_taxonomy(artifacts.get("overview_top_models", leaderboard.head(5).copy()))
+    )
     overview_prediction_paths = artifacts.get("overview_prediction_paths")
     if overview_prediction_paths is None:
         top_configs = overview_top_models["config_id"].head(5).tolist()
@@ -1403,6 +1760,7 @@ def main() -> None:
 
     if page == "Project Overview":
         st.subheader("Project Overview")
+        render_public_bundle_note(experiment_manifest)
         st.markdown(PROJECT_OVERVIEW)
 
         overview_cols = st.columns(4)
@@ -1444,6 +1802,7 @@ def main() -> None:
         tab_modeling_overview,
         tab_forecast,
         tab_performance,
+        tab_metric_mapping,
         tab_features,
         tab_ops,
     ) = st.tabs(
@@ -1451,6 +1810,7 @@ def main() -> None:
             "Modeling Overview",
             "Forecast Explorer",
             "Model Performance",
+            "Metric Mapping",
             "Feature Strategy",
             "Operational Footprint",
         ]
@@ -1815,13 +2175,23 @@ def main() -> None:
             "r2_adjusted",
             "diracc",
             "selection_score",
+            "selection_score_typical",
+            "selection_score_balanced",
+            "selection_score_large_error",
             "pre_covid_mae",
+            "pre_covid_rmse",
             "covid_shock_mae",
+            "covid_shock_rmse",
             "recovery_mae",
+            "recovery_rmse",
             "recent_mae",
+            "recent_rmse",
             "shock_penalty",
+            "rmse_shock_penalty",
             "recovery_ratio",
+            "rmse_recovery_ratio",
             "recent_recovery_ratio",
+            "rmse_recent_recovery_ratio",
         ]
         available_cols = [column for column in display_cols if column in leaderboard.columns]
         st.dataframe(filtered_leaderboard[available_cols].head(50), use_container_width=True, hide_index=True)
@@ -1834,13 +2204,44 @@ def main() -> None:
             "feature_policy",
             "feature_family_name",
             "selection_score",
+            "selection_score_typical",
+            "selection_score_balanced",
+            "selection_score_large_error",
             "pre_covid_mae",
+            "pre_covid_rmse",
+            "pre_covid_selection_score_typical",
+            "pre_covid_selection_score_balanced",
+            "pre_covid_selection_score_large_error",
             "covid_shock_mae",
+            "covid_shock_rmse",
+            "covid_shock_selection_score_typical",
+            "covid_shock_selection_score_balanced",
+            "covid_shock_selection_score_large_error",
             "recovery_mae",
+            "recovery_rmse",
+            "recovery_selection_score_typical",
+            "recovery_selection_score_balanced",
+            "recovery_selection_score_large_error",
             "recent_mae",
+            "recent_rmse",
+            "recent_selection_score_typical",
+            "recent_selection_score_balanced",
+            "recent_selection_score_large_error",
             "shock_penalty",
+            "rmse_shock_penalty",
+            "typical_score_shock_penalty",
+            "balanced_score_shock_penalty",
+            "large_error_score_shock_penalty",
             "recovery_ratio",
+            "rmse_recovery_ratio",
+            "typical_score_recovery_ratio",
+            "balanced_score_recovery_ratio",
+            "large_error_score_recovery_ratio",
             "recent_recovery_ratio",
+            "rmse_recent_recovery_ratio",
+            "typical_score_recent_recovery_ratio",
+            "balanced_score_recent_recovery_ratio",
+            "large_error_score_recent_recovery_ratio",
         ]
         available_period_cols = [column for column in period_cols if column in filtered_leaderboard.columns]
         if len(available_period_cols) > 6:
@@ -1915,6 +2316,146 @@ def main() -> None:
         fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
+    with tab_metric_mapping:
+        st.subheader("Metric Mapping")
+        st.write(
+            "Map model configurations across two evaluation metrics to inspect tradeoffs, "
+            "clusters, and cases where a model family performs well on one dimension but "
+            "not another."
+        )
+        metric_options = available_rank_options(leaderboard)
+        build_options = ordered_unique(leaderboard["model_build"], MODEL_BUILD_ORDER)
+        control_cols = st.columns([1, 1, 1, 1, 1])
+        x_metric = control_cols[0].selectbox(
+            "X axis",
+            metric_options,
+            index=selectbox_index(metric_options, "MAE"),
+            key="mapping_x_metric",
+        )
+        y_metric = control_cols[1].selectbox(
+            "Y axis",
+            metric_options,
+            index=selectbox_index(metric_options, "R-squared"),
+            key="mapping_y_metric",
+        )
+        rank_metric = control_cols[2].selectbox(
+            "Rank slice by",
+            metric_options,
+            index=selectbox_index(metric_options, "Balanced score"),
+            key="mapping_rank_metric",
+        )
+        per_build_limit = control_cols[3].selectbox(
+            "Configs per build",
+            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            index=1,
+            key="mapping_per_build_limit",
+        )
+        point_mode = control_cols[4].selectbox(
+            "Point mode",
+            ["Each configuration", "Average by model build"],
+            key="mapping_point_mode",
+        )
+        selected_builds = st.multiselect(
+            "Model builds",
+            build_options,
+            default=build_options,
+            key="mapping_model_builds",
+        )
+        color_by = st.selectbox(
+            "Color by",
+            ["model_family", "model_build", "feature_policy", "mode"],
+            key="mapping_color_by",
+        )
+
+        mapping_frame = metric_mapping_frame(
+            leaderboard,
+            selected_builds,
+            rank_metric,
+            per_build_limit,
+        )
+        aggregate_points = point_mode == "Average by model build"
+        if aggregate_points and not mapping_frame.empty:
+            mapping_frame = aggregate_metric_mapping(mapping_frame, x_metric, y_metric)
+
+        if mapping_frame.empty:
+            st.info("No model configurations match the selected metric mapping controls.")
+        else:
+            st.caption(
+                f"Showing {format_int(len(mapping_frame))} point(s). "
+                f"Slice is selected by `{rank_metric}` within each chosen model build."
+            )
+            st.plotly_chart(
+                metric_mapping_chart(
+                    mapping_frame,
+                    x_metric,
+                    y_metric,
+                    color_by,
+                    aggregate_points,
+                ),
+                use_container_width=True,
+            )
+            table_cols = [
+                "model_family",
+                "model_build",
+                "mode",
+                "feature_policy",
+                "feature_family_name",
+                "configurations",
+                "mae",
+                "rmse",
+                "r2",
+                "r2_adjusted",
+                "diracc",
+                "selection_score",
+                "selection_score_typical",
+                "selection_score_balanced",
+                "selection_score_large_error",
+                "pre_covid_mae",
+                "pre_covid_rmse",
+                "pre_covid_selection_score_typical",
+                "pre_covid_selection_score_balanced",
+                "pre_covid_selection_score_large_error",
+                "covid_shock_mae",
+                "covid_shock_rmse",
+                "covid_shock_selection_score_typical",
+                "covid_shock_selection_score_balanced",
+                "covid_shock_selection_score_large_error",
+                "recovery_mae",
+                "recovery_rmse",
+                "recovery_selection_score_typical",
+                "recovery_selection_score_balanced",
+                "recovery_selection_score_large_error",
+                "recent_mae",
+                "recent_rmse",
+                "recent_selection_score_typical",
+                "recent_selection_score_balanced",
+                "recent_selection_score_large_error",
+                "shock_penalty",
+                "rmse_shock_penalty",
+                "typical_score_shock_penalty",
+                "balanced_score_shock_penalty",
+                "large_error_score_shock_penalty",
+                "recovery_ratio",
+                "rmse_recovery_ratio",
+                "typical_score_recovery_ratio",
+                "balanced_score_recovery_ratio",
+                "large_error_score_recovery_ratio",
+                "recent_recovery_ratio",
+                "rmse_recent_recovery_ratio",
+                "typical_score_recent_recovery_ratio",
+                "balanced_score_recent_recovery_ratio",
+                "large_error_score_recent_recovery_ratio",
+                "complexity_score",
+                "interpretability_score",
+                "compute_score",
+            ]
+            available_mapping_cols = [column for column in table_cols if column in mapping_frame.columns]
+            st.dataframe(
+                mapping_frame[available_mapping_cols].head(200),
+                use_container_width=True,
+                hide_index=True,
+            )
+
     with tab_features:
         st.subheader("Feature Family Ranking")
         family_display = family_summary.sort_values("best_selection_score").copy()
@@ -1927,7 +2468,7 @@ def main() -> None:
             color="mode",
             orientation="h",
             labels={
-                "best_selection_score": "Best selection score (lower is better)",
+                "best_selection_score": "Best balanced score (lower is better)",
                 "feature_family_name": "Feature family",
                 "mode": "Mode",
             },

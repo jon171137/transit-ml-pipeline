@@ -41,15 +41,46 @@ JSON_FILES = [
 
 CORE_LOWER_IS_BETTER = [
     "selection_score",
+    "selection_score_typical",
+    "selection_score_balanced",
+    "selection_score_large_error",
     "mae",
     "rmse",
     "pre_covid_mae",
+    "pre_covid_rmse",
+    "pre_covid_selection_score_typical",
+    "pre_covid_selection_score_balanced",
+    "pre_covid_selection_score_large_error",
     "covid_shock_mae",
+    "covid_shock_rmse",
+    "covid_shock_selection_score_typical",
+    "covid_shock_selection_score_balanced",
+    "covid_shock_selection_score_large_error",
     "recovery_mae",
+    "recovery_rmse",
+    "recovery_selection_score_typical",
+    "recovery_selection_score_balanced",
+    "recovery_selection_score_large_error",
     "recent_mae",
+    "recent_rmse",
+    "recent_selection_score_typical",
+    "recent_selection_score_balanced",
+    "recent_selection_score_large_error",
     "shock_penalty",
+    "rmse_shock_penalty",
+    "typical_score_shock_penalty",
+    "balanced_score_shock_penalty",
+    "large_error_score_shock_penalty",
     "recovery_ratio",
+    "rmse_recovery_ratio",
+    "typical_score_recovery_ratio",
+    "balanced_score_recovery_ratio",
+    "large_error_score_recovery_ratio",
     "recent_recovery_ratio",
+    "rmse_recent_recovery_ratio",
+    "typical_score_recent_recovery_ratio",
+    "balanced_score_recent_recovery_ratio",
+    "large_error_score_recent_recovery_ratio",
 ]
 
 CORE_HIGHER_IS_BETTER = [
@@ -70,6 +101,13 @@ SECONDARY_HIGHER_IS_BETTER = [
     "recent_diracc",
     "interpretability_score",
 ]
+
+SCORE_RECIPES = {
+    "typical": {"mae_weight": 0.90, "rmse_weight": 0.10},
+    "balanced": {"mae_weight": 0.75, "rmse_weight": 0.25},
+    "large_error": {"mae_weight": 0.50, "rmse_weight": 0.50},
+}
+EVALUATION_PERIODS = ["pre_covid", "covid_shock", "recovery", "recent"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +163,73 @@ def model_id_column(df: pd.DataFrame) -> str:
     if "config_id" in df.columns:
         return "config_id"
     raise KeyError("Expected either model_config_id or config_id.")
+
+
+def weighted_error_score(mae: pd.Series, rmse: pd.Series, recipe: dict) -> pd.Series:
+    return recipe["mae_weight"] * pd.to_numeric(mae, errors="coerce") + recipe["rmse_weight"] * pd.to_numeric(
+        rmse,
+        errors="coerce",
+    )
+
+
+def safe_ratio(numerator, denominator) -> float:
+    if pd.isna(numerator) or pd.isna(denominator) or denominator == 0:
+        return float("nan")
+    return float(numerator / denominator)
+
+
+def enrich_score_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if {"mae", "rmse"}.issubset(out.columns):
+        for recipe_name, recipe in SCORE_RECIPES.items():
+            out[f"selection_score_{recipe_name}"] = weighted_error_score(out["mae"], out["rmse"], recipe)
+        if "selection_score" not in out:
+            out["selection_score"] = out["selection_score_balanced"]
+
+    for period in EVALUATION_PERIODS:
+        mae_col = f"{period}_mae"
+        rmse_col = f"{period}_rmse"
+        if {mae_col, rmse_col}.issubset(out.columns):
+            for recipe_name, recipe in SCORE_RECIPES.items():
+                out[f"{period}_selection_score_{recipe_name}"] = weighted_error_score(
+                    out[mae_col],
+                    out[rmse_col],
+                    recipe,
+                )
+            legacy_col = f"{period}_selection_score"
+            if legacy_col not in out:
+                out[legacy_col] = out[f"{period}_selection_score_balanced"]
+
+    ratio_specs = {
+        "shock_penalty": ("covid_shock_mae", "pre_covid_mae"),
+        "recovery_ratio": ("recovery_mae", "pre_covid_mae"),
+        "recent_recovery_ratio": ("recent_mae", "pre_covid_mae"),
+        "rmse_shock_penalty": ("covid_shock_rmse", "pre_covid_rmse"),
+        "rmse_recovery_ratio": ("recovery_rmse", "pre_covid_rmse"),
+        "rmse_recent_recovery_ratio": ("recent_rmse", "pre_covid_rmse"),
+    }
+    for recipe_name in SCORE_RECIPES:
+        prefix = f"{recipe_name}_score"
+        ratio_specs[f"{prefix}_shock_penalty"] = (
+            f"covid_shock_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+        ratio_specs[f"{prefix}_recovery_ratio"] = (
+            f"recovery_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+        ratio_specs[f"{prefix}_recent_recovery_ratio"] = (
+            f"recent_selection_score_{recipe_name}",
+            f"pre_covid_selection_score_{recipe_name}",
+        )
+
+    for output_col, (numerator_col, denominator_col) in ratio_specs.items():
+        if {numerator_col, denominator_col}.issubset(out.columns):
+            out[output_col] = [
+                safe_ratio(numerator, denominator)
+                for numerator, denominator in zip(out[numerator_col], out[denominator_col])
+            ]
+    return out
 
 
 def configs_for_metric(df: pd.DataFrame, metric: str, keep_fraction: float, lower_is_better: bool) -> set[str]:
@@ -208,6 +313,9 @@ def recompute_feature_family_summary(leaderboard: pd.DataFrame) -> pd.DataFrame:
     agg_spec = {}
     source_to_output = {
         "selection_score": ("best_selection_score", "min"),
+        "selection_score_typical": ("best_selection_score_typical", "min"),
+        "selection_score_balanced": ("best_selection_score_balanced", "min"),
+        "selection_score_large_error": ("best_selection_score_large_error", "min"),
         "rmse": ("best_rmse", "min"),
         "mae": ("best_mae", "min"),
         "r2": ("best_r2", "max"),
@@ -246,6 +354,7 @@ def main() -> None:
     champion_path = args.input_dir / "champion_selection.json"
     require_file(champion_path)
     champion = json.loads(champion_path.read_text(encoding="utf-8"))
+    frames["model_leaderboard"] = enrich_score_columns(frames["model_leaderboard"])
 
     selected, summary = select_public_configs(
         frames["model_leaderboard"],

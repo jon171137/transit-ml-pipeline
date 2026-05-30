@@ -193,18 +193,25 @@ better through structural change.
 
 ### Leaderboard
 
-The main leaderboard ranks configurations by a selection score:
+The dashboard now keeps several weighted error scores instead of treating one
+score as the only answer:
 
-`selection_score = 0.75 * MAE + 0.25 * RMSE`
+- `typical_error_score = 0.90 * MAE + 0.10 * RMSE`
+- `balanced_score = 0.75 * MAE + 0.25 * RMSE`
+- `large_error_score = 0.50 * MAE + 0.50 * RMSE`
 
 MAE keeps the score focused on typical absolute error. RMSE adds pressure
-against occasional large misses. The champion rule then applies a 2 percent
-equivalence band and prefers the simpler model when performance is close enough.
+against occasional large misses. The typical-error score is useful when the
+main question is ordinary month-to-month accuracy. The large-error score is
+useful when avoiding occasional bad misses matters more. The balanced score
+preserves the original project default between those two priorities.
 
-That rule is intentionally opinionated. The project is not only chasing the
-lowest possible error; it is also showing the tradeoff between performance,
-stability, and parsimony. If a simpler feature set performs nearly as well as a
-larger one, that is an important result.
+The current champion is still selected with the balanced score plus a 2 percent
+equivalence band, then the simpler model is preferred when performance is close
+enough. The point is not only to chase the lowest possible error; it is also to
+show the tradeoff between performance, stability, and parsimony. If a simpler
+feature set performs nearly as well as a larger one, that is an important
+result.
 
 ### Period Metrics
 
@@ -216,6 +223,9 @@ also calculates performance by target-month period:
 - `recovery`: early recovery and adjustment
 - `recent`: the newer operating regime
 
+The same score recipes are also calculated inside each period. That makes it
+possible to ask whether a model is best under ordinary conditions, best during
+the COVID shock, best during recovery, or best in the recent operating regime.
 The derived ratios compare each disruption/recovery period against pre-COVID
 error. A model with a low overall score but a high shock penalty may be accurate
 on average while still being fragile at the moment when robustness matters most.
@@ -270,6 +280,24 @@ if the model was trained at each historical as-of date, how accurate was its
 `recovery` covers July 2021 through December 2022.
 `recent` covers January 2023 onward.
 
+The dashboard provides three weighted score families:
+
+`typical_error_score = 0.90 * MAE + 0.10 * RMSE`.
+This emphasizes ordinary month-to-month absolute error, so it is useful when
+typical accuracy matters more than rare misses.
+
+`balanced_score = 0.75 * MAE + 0.25 * RMSE`.
+This is the original project scoring logic and balances typical accuracy with a
+moderate penalty for larger mistakes.
+
+`large_error_score = 0.50 * MAE + 0.50 * RMSE`.
+This gives RMSE enough weight to surface models that avoid large misses, even if
+their ordinary absolute error is not the lowest.
+
+Each score is also computed within the pre-COVID, shock, recovery, and recent
+periods. Period-specific score ratios use the same structure as the MAE and RMSE
+ratios: period score divided by the pre-COVID score.
+
 `shock_penalty = covid_shock_mae / pre_covid_mae`.
 This asks how much worse the model became during the abrupt COVID disruption
 compared with its normal pre-COVID error, emphasizing shock sensitivity.
@@ -282,7 +310,7 @@ recovery period, emphasizing adaptation after the structural break.
 This asks whether the model's recent error has returned near its original
 baseline, emphasizing long-run stabilization rather than only crisis response.
 
-Lower values are better for MAE, RMSE, selection score, and the ratio metrics.
+Lower values are better for MAE, RMSE, weighted error scores, and the ratio metrics.
 Higher values are better for R2 and directional accuracy.
 
 Adjusted R2 is tracked where it is statistically meaningful, currently as a
@@ -294,9 +322,18 @@ accuracy.
 
 
 PERIOD_METRIC_SHORT_EXPLANATION = """
-The leaderboard uses overall performance for the main rank, but it also includes
-period-specific MAE columns. These are useful for finding models that were not
-just accurate overall, but also resilient through disruption.
+The leaderboard includes overall and period-specific MAE, RMSE, and weighted
+error scores. These are useful for finding models that were not just accurate
+overall, but also resilient through disruption.
+
+`typical_error_score = 0.90 * MAE + 0.10 * RMSE`.
+This favors ordinary month-to-month accuracy.
+
+`balanced_score = 0.75 * MAE + 0.25 * RMSE`.
+This preserves the original project default and lightly penalizes large misses.
+
+`large_error_score = 0.50 * MAE + 0.50 * RMSE`.
+This emphasizes consistency by making large misses more expensive.
 
 `shock_penalty = covid_shock_mae / pre_covid_mae`.
 This emphasizes how fragile or resilient a model was when ridership behavior
