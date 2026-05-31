@@ -84,11 +84,44 @@ compares raw sequence inputs under each selector plus PCA branches on the
 unpruned input. This avoids a needlessly large selector-by-PCA Cartesian
 product while preserving the important comparisons.
 
+## Recurrent Capacity Screen
+
+If the refinement stage remains materially behind the tabular models, use:
+
+```text
+experiment_configs/phase_c_neural_capacity_screen.yaml
+```
+
+This stage tests a different question: whether the compact neural search space
+was underfitting. It evaluates `40` configurations and `1,600` quarterly
+rolling fits, concentrating on larger RNN, GRU, and LSTM stacks. The runner
+supports:
+
+- asymmetric recurrent widths such as `1000 -> 100`
+- dense prediction heads such as `200 -> 10 -> 1`
+- dropout between recurrent layers and within the dense head
+- Adam weight decay as an L2-style regularization control
+- batch size `24`, matching the earlier successful notebook neighborhood
+- up to `300` epochs with early stopping and learning-rate scheduling
+
+The largest LSTM branch is inspired by an earlier post-COVID Keras experiment,
+but it is not an exact framework replication. Keras `recurrent_dropout`
+randomly masks recurrent state connections inside an LSTM cell. PyTorch's
+built-in LSTM does not expose the same switch, so the portable runner applies
+dropout between explicit recurrent layers and in the dense prediction head.
+
+Run the capacity contract smoke before launching the GPU screen:
+
+```bash
+python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_capacity_smoke.yaml
+```
+
 Inspect the count before each launch:
 
 ```bash
 python plan_neural_experiment.py \
-  --config experiment_configs/phase_c_neural_refinement.yaml
+  --config experiment_configs/phase_c_neural_capacity_screen.yaml
 ```
 
 ## Colab Workflow

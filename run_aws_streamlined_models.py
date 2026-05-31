@@ -1719,6 +1719,16 @@ def order_sum(params: dict, name: str) -> float:
     return float(sum(abs(int(value)) for value in values if value is not None))
 
 
+def dense_head_size_proxy(input_size: float, params: dict) -> float:
+    total = 0.0
+    current_size = input_size
+    for dense_size in params.get("dense_head_sizes") or []:
+        dense_size = float(dense_size)
+        total += current_size * dense_size + dense_size
+        current_size = dense_size
+    return total + current_size + 1.0
+
+
 def model_size_proxy(row: pd.Series) -> float:
     params = safe_json_loads(row.get("hyperparameters_json"))
     model_type = row.get("model_type")
@@ -1741,14 +1751,24 @@ def model_size_proxy(row: pd.Series) -> float:
     if model_type == "mlp":
         sequence_length = numeric_param(params, "sequence_length", 1.0)
         hidden_size = numeric_param(params, "hidden_size", 1.0)
-        return max(1.0, sequence_length * n_features * hidden_size + hidden_size)
+        encoder_size = sequence_length * n_features * hidden_size + hidden_size
+        return max(1.0, encoder_size + dense_head_size_proxy(hidden_size, params))
     if model_type in {"rnn", "gru", "lstm"}:
         hidden_size = numeric_param(params, "hidden_size", 1.0)
         num_layers = numeric_param(params, "num_layers", 1.0)
+        hidden_sizes = params.get("recurrent_hidden_sizes") or [hidden_size] * int(num_layers)
+        hidden_sizes = [float(value) for value in hidden_sizes]
         gate_count = {"rnn": 1.0, "gru": 3.0, "lstm": 4.0}[model_type]
-        first_layer = gate_count * (n_features * hidden_size + hidden_size * hidden_size + hidden_size)
-        later_layers = max(0.0, num_layers - 1.0) * gate_count * (2.0 * hidden_size**2 + hidden_size)
-        return max(1.0, first_layer + later_layers + hidden_size)
+        recurrent_size = 0.0
+        input_size = n_features
+        for layer_hidden_size in hidden_sizes:
+            recurrent_size += gate_count * (
+                input_size * layer_hidden_size
+                + layer_hidden_size * layer_hidden_size
+                + layer_hidden_size
+            )
+            input_size = layer_hidden_size
+        return max(1.0, recurrent_size + dense_head_size_proxy(hidden_sizes[-1], params))
     return max(1.0, n_features)
 
 

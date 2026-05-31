@@ -971,3 +971,31 @@
   - the second execution resumed all `6` completed chunks
 - Loaded the revised smoke artifacts into DuckDB and exported dashboard
   artifacts successfully.
+
+## Phase C Recurrent Capacity Screen
+
+- Added asymmetric recurrent-stack and dense-head support to
+  `run_neural_models.py`.
+- The PyTorch Phase C runner now supports:
+  - `recurrent_hidden_sizes`
+  - `dense_head_sizes`
+  - `dense_head_dropouts`
+  - Adam `weight_decay`
+- Bumped the neural runner contract version so prior compact-model chunks are
+  not silently reused for the new architecture semantics.
+- Updated neural complexity profiling to account for asymmetric recurrent
+  stacks and dense prediction heads.
+- Added `experiment_configs/phase_c_neural_capacity_smoke.yaml`.
+- Added `experiment_configs/phase_c_neural_capacity_screen.yaml`:
+  - `40` curated RNN, GRU, and LSTM configurations
+  - `40` quarterly rolling as-of dates
+  - `1,600` estimated fits
+  - LSTM candidates include the `1000 -> 100 -> 200 -> 10 -> 1` neighborhood
+    inspired by an earlier post-COVID Keras experiment
+- Documented that PyTorch inter-layer dropout is a portable approximation, not
+  an exact implementation of Keras `recurrent_dropout`.
+- Ran the asymmetric-stack CPU smoke twice:
+  - first execution produced `3` forecast/model-run rows
+  - second execution resumed its completed chunk
+- Loaded the capacity smoke artifacts into DuckDB and exported dashboard
+  artifacts successfully.

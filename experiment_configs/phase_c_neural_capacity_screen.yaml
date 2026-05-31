@@ -1,0 +1,75 @@
+experiment_id: phase_c_neural_capacity_screen
+description: >
+  Capacity-focused Phase C screen inspired by an earlier post-COVID Keras LSTM
+  experiment. This stage tests materially larger recurrent stacks and richer
+  dense heads under the stricter rolling historical simulation.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_capacity_screen/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_capacity_screen
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2016-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 3
+  min_train_rows: 60
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_capacity_screen/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_capacity_screen/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-capacity
+    run_name: phase_c_neural_capacity_screen
+
+feature_families:
+  include:
+    - history_regime_time
+
+modes:
+  - raw
+  - residual
+
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+
+models:
+  rnn:
+    enabled: true
+    param_grid:
+      - {sequence_length: 24, recurrent_hidden_sizes: [128, 64], dropout: 0.1, dense_head_sizes: [100, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+
+  gru:
+    enabled: true
+    param_grid:
+      - {sequence_length: 24, recurrent_hidden_sizes: [128, 64], dropout: 0.1, dense_head_sizes: [100, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [512, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+
+  lstm:
+    enabled: true
+    param_grid:
+      - {sequence_length: 24, recurrent_hidden_sizes: [128, 64], dropout: 0.1, dense_head_sizes: [100, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [512, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [1000, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.4, 0.3], weight_decay: 0.0001, learning_rate: 0.0025, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 48, recurrent_hidden_sizes: [1000, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.4, 0.3], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+

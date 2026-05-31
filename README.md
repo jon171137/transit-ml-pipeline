@@ -381,6 +381,26 @@ quarterly rolling as-of dates: `14,400` fits. It raises the epoch ceiling to
 purposeful feature-policy/representation variants without expanding every
 selector across every PCA branch.
 
+If the compact neural models remain underfit, run the capacity-screen contract
+smoke:
+
+```bash
+.venv/bin/python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_capacity_smoke.yaml
+```
+
+Then inspect the larger recurrent-capacity screen:
+
+```bash
+.venv/bin/python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_capacity_screen.yaml
+```
+
+The capacity screen evaluates `40` curated configurations over `40` quarterly
+rolling as-of dates: `1,600` fits. It supports asymmetric recurrent stacks,
+configurable dense prediction heads, Adam weight decay, and materially wider
+LSTM candidates including a `1000 -> 100 -> 200 -> 10 -> 1` neighborhood.
+
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic
 exogenous sets. Those outputs can be merged back with Phase A for a unified

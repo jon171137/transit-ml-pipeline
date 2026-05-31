@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "jolese-transit-ml-portfolio-367995857052-us-east-1-an")
 MODEL_RESULTS_PREFIX = os.environ.get("MODEL_RESULTS_PREFIX", "model_results/neural")
 DASHBOARD_OUTPUT_PREFIX = os.environ.get("DASHBOARD_OUTPUT_PREFIX", "dashboard/neural")
-NEURAL_RUNNER_CONTRACT_VERSION = "v4_policy_representation_stable_metrics"
+NEURAL_RUNNER_CONTRACT_VERSION = "v5_capacity_architectures"
 
 FEATURE_IMPORTANCE_COLUMNS = [
     "experiment_id",
@@ -135,32 +135,63 @@ class SequenceRegressor(nn.Module):
         self.model_type = model_type
         hidden_size = int(params.get("hidden_size", 32))
         num_layers = int(params.get("num_layers", 1))
-        dropout = float(params.get("dropout", 0.0)) if num_layers > 1 else 0.0
+        encoder_dropout = float(params.get("dropout", 0.0))
         if model_type == "mlp":
             sequence_length = int(params["sequence_length"])
             self.encoder = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(sequence_length * n_features, hidden_size),
                 nn.ReLU(),
-                nn.Dropout(float(params.get("dropout", 0.0))),
+                nn.Dropout(encoder_dropout),
             )
+            encoded_size = hidden_size
         else:
             recurrent_cls = {"rnn": nn.RNN, "gru": nn.GRU, "lstm": nn.LSTM}[model_type]
-            self.encoder = recurrent_cls(
-                input_size=n_features,
-                hidden_size=hidden_size,
-                num_layers=num_layers,
-                dropout=dropout,
-                batch_first=True,
-            )
-        self.head = nn.Linear(hidden_size, 1)
+            recurrent_hidden_sizes = params.get("recurrent_hidden_sizes") or [hidden_size] * num_layers
+            recurrent_hidden_sizes = [int(value) for value in recurrent_hidden_sizes]
+            self.encoder = nn.ModuleList()
+            self.recurrent_dropouts = nn.ModuleList()
+            input_size = n_features
+            for layer_index, layer_hidden_size in enumerate(recurrent_hidden_sizes):
+                self.encoder.append(
+                    recurrent_cls(
+                        input_size=input_size,
+                        hidden_size=layer_hidden_size,
+                        num_layers=1,
+                        batch_first=True,
+                    )
+                )
+                if layer_index < len(recurrent_hidden_sizes) - 1:
+                    self.recurrent_dropouts.append(nn.Dropout(encoder_dropout))
+                input_size = layer_hidden_size
+            encoded_size = recurrent_hidden_sizes[-1]
+        dense_head_sizes = [int(value) for value in params.get("dense_head_sizes", [])]
+        dense_head_dropouts = params.get("dense_head_dropouts", [])
+        if not isinstance(dense_head_dropouts, list):
+            dense_head_dropouts = [dense_head_dropouts] * len(dense_head_sizes)
+        dense_head_dropouts = [
+            float(dense_head_dropouts[index]) if index < len(dense_head_dropouts) else 0.0
+            for index in range(len(dense_head_sizes))
+        ]
+        head_layers = []
+        for dense_size, dense_dropout in zip(dense_head_sizes, dense_head_dropouts):
+            head_layers.extend([nn.Linear(encoded_size, dense_size), nn.ReLU()])
+            if dense_dropout:
+                head_layers.append(nn.Dropout(dense_dropout))
+            encoded_size = dense_size
+        head_layers.append(nn.Linear(encoded_size, 1))
+        self.head = nn.Sequential(*head_layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if self.model_type == "mlp":
             encoded = self.encoder(inputs)
         else:
-            outputs, _ = self.encoder(inputs)
-            encoded = outputs[:, -1, :]
+            encoded = inputs
+            for layer_index, recurrent_layer in enumerate(self.encoder):
+                encoded, _ = recurrent_layer(encoded)
+                if layer_index < len(self.recurrent_dropouts):
+                    encoded = self.recurrent_dropouts[layer_index](encoded)
+            encoded = encoded[:, -1, :]
         return self.head(encoded).squeeze(-1)
 
 
@@ -265,7 +296,11 @@ def fit_model(
     )
 
     model = SequenceRegressor(model_type, represented_fit.shape[-1], params).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(params.get("learning_rate", 1e-3)))
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=float(params.get("learning_rate", 1e-3)),
+        weight_decay=float(params.get("weight_decay", 0.0)),
+    )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
