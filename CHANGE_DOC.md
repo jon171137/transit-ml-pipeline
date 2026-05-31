@@ -999,3 +999,29 @@
   - second execution resumed its completed chunk
 - Loaded the capacity smoke artifacts into DuckDB and exported dashboard
   artifacts successfully.
+
+## Phase C Full-History Neural Feature-Family Screen
+
+- Added `experiment_configs/phase_c_neural_feature_family_screen.yaml`.
+- The widened screen restores project-wide neural comparison coverage:
+  - full January 2011 through December 2025 as-of window
+  - `21` current feature families
+  - raw and residual modes
+  - promoted GRU and LSTM capacity structures
+  - targeted raw, pruned, mutual-information, and PCA variants
+- Added neural dynamic policy deduplication:
+  - policies are preflighted across the complete rolling evaluation history
+  - a branch is skipped only if it selects the same rolling feature history as
+    an already-scheduled policy for the same family, mode, and representation
+  - skipped equivalents are recorded in the experiment manifest
+- Added optional family-width bounds to neural policy/representation variants.
+- Updated `plan_neural_experiment.py` so planner counts apply configured
+  family-width bounds and clearly label the resulting fit count as an upper
+  bound before runtime deduplication.
+- Added `--shard-index` and `--shard-count` to `run_neural_models.py`.
+  Sharded runs write isolated result, dashboard, chunk, and checkpoint folders
+  for clean multi-worker execution and later merging.
+- Re-ran the capacity smoke with dynamic deduplication enabled:
+  - `variance_pruned` matched `none` for `history_regime_time`
+  - the redundant branch was skipped and recorded in the manifest
+- Ran a two-shard contract smoke for shard `0` successfully.

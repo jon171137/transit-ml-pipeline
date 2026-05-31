@@ -39,6 +39,13 @@ def policy_representation_variants(config: dict) -> list[dict]:
     ]
 
 
+def variant_applies(variant: dict, n_family_features: int) -> bool:
+    if n_family_features < int(variant.get("min_family_features", 0)):
+        return False
+    max_family_features = variant.get("max_family_features")
+    return max_family_features is None or n_family_features <= int(max_family_features)
+
+
 def build_summary(config: dict, feature_families_path: Path | None) -> dict:
     forecast = config.get("forecast") or {}
     families = (config.get("feature_families") or {}).get("include") or []
@@ -49,6 +56,13 @@ def build_summary(config: dict, feature_families_path: Path | None) -> dict:
         forecast["as_of_end"],
         int(forecast.get("as_of_frequency_months", 1)),
     )
+    available_families = json.loads(feature_families_path.read_text()) if feature_families_path else {}
+    applicable_variant_total = sum(
+        sum(variant_applies(variant, len(available_families.get(family, []))) for variant in variants)
+        for family in families
+    )
+    if not feature_families_path:
+        applicable_variant_total = len(families) * len(variants)
     model_rows = []
     for model_build, details in (config.get("models") or {}).items():
         if not details.get("enabled", False):
@@ -62,15 +76,15 @@ def build_summary(config: dict, feature_families_path: Path | None) -> dict:
                 "feature_family_count": len(families),
                 "mode_count": len(modes),
                 "policy_representation_variant_count": len(variants),
+                "applicable_family_variant_count": applicable_variant_total,
                 "model_config_count": (
                     param_count
-                    * len(families)
                     * len(modes)
-                    * len(variants)
+                    * applicable_variant_total
                 ),
             }
         )
-    available = set(json.loads(feature_families_path.read_text())) if feature_families_path else set()
+    available = set(available_families)
     total_configs = sum(row["model_config_count"] for row in model_rows)
     return {
         "experiment_id": config.get("experiment_id"),
@@ -87,6 +101,10 @@ def build_summary(config: dict, feature_families_path: Path | None) -> dict:
         },
         "total_model_configurations": total_configs,
         "estimated_model_fits": total_configs * as_of_count,
+        "estimate_note": (
+            "Upper bound after configured family-width applicability rules. "
+            "Runtime dynamic policy deduplication may skip equivalent rolling selected-feature branches."
+        ),
         "checkpointing": (config.get("execution") or {}).get("checkpointing", {}),
     }
 

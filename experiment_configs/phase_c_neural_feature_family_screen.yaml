@@ -1,0 +1,92 @@
+experiment_id: phase_c_neural_feature_family_screen
+description: >
+  Full-history Phase C neural feature-family screen. It expands shortlisted
+  recurrent-capacity architectures across the feature families used by the
+  broader project while dynamically skipping policy branches that select the
+  same rolling feature history as an already-scheduled branch.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_feature_family_screen/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_feature_family_screen
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 3
+  min_train_rows: 60
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_feature_family_screen/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_feature_family_screen/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-features
+    run_name: phase_c_neural_feature_family_screen
+
+feature_families:
+  include:
+    - history_only
+    - history_recent
+    - history_rolls
+    - history_full
+    - history_regime
+    - history_regime_time
+    - history_regime_gas
+    - history_regime_cpi
+    - history_regime_service
+    - history_regime_gas_cpi
+    - history_regime_gas_service
+    - history_regime_cpi_service
+    - history_regime_all_exog
+    - history_regime_time_all_exog
+    - history_regime_linear_interactions
+    - history_regime_time_linear_interactions
+    - history_regime_exog_linear_interactions
+    - history_regime_all_exog_linear_interactions
+    - history_regime_income
+    - history_regime_income_pressure
+    - history_regime_income_linear_interactions
+
+modes:
+  - raw
+  - residual
+
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw, min_family_features: 30}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw, min_family_features: 31}
+  - {feature_policy: none, representation_policy: sequence_pca_20, min_family_features: 31}
+  - {feature_policy: none, representation_policy: sequence_pca_95, min_family_features: 31}
+
+models:
+  gru:
+    enabled: true
+    param_grid:
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [512, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+
+  lstm:
+    enabled: true
+    param_grid:
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 36, recurrent_hidden_sizes: [1000, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.4, 0.3], weight_decay: 0.0001, learning_rate: 0.0025, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      - {sequence_length: 48, recurrent_hidden_sizes: [1000, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.4, 0.3], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+

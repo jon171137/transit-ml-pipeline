@@ -401,6 +401,32 @@ rolling as-of dates: `1,600` fits. It supports asymmetric recurrent stacks,
 configurable dense prediction heads, Adam weight decay, and materially wider
 LSTM candidates including a `1000 -> 100 -> 200 -> 10 -> 1` neighborhood.
 
+After selecting recurrent-capacity finalists, inspect the full-history
+feature-family screen:
+
+```bash
+.venv/bin/python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_feature_family_screen.yaml
+```
+
+The widened screen evaluates the promoted GRU and LSTM structures across all
+`21` current feature families from 2011 through the present simulation. It
+enables dynamic policy deduplication: when two policies produce the same
+rolling selected-feature history for a family and mode, the redundant branch
+is skipped and documented in the experiment manifest.
+
+Large neural screens can be split across independent workers:
+
+```bash
+python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_feature_family_screen.yaml \
+  --shard-index 0 \
+  --shard-count 4
+```
+
+Each shard writes isolated result, chunk, and checkpoint folders so the
+completed artifact bundles can be merged after all workers finish.
+
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic
 exogenous sets. Those outputs can be merged back with Phase A for a unified

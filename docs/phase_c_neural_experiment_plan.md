@@ -117,6 +117,44 @@ python run_neural_models.py \
   --experiment-config experiment_configs/phase_c_neural_capacity_smoke.yaml
 ```
 
+## Full-History Feature-Family Screen
+
+After identifying recurrent-capacity finalists, use:
+
+```text
+experiment_configs/phase_c_neural_feature_family_screen.yaml
+```
+
+This screen restores the broad project comparison:
+
+- full historical simulation from January 2011 through December 2025 as-of
+  dates
+- three-month-ahead UPT forecasts
+- quarterly refits for screening speed
+- all `21` current feature families
+- raw and residual modes
+- promoted GRU and LSTM capacity structures
+- raw, pruned, mutual-information, and PCA branches where applicable
+
+The configured planner estimate is an upper bound after family-width rules.
+Runtime dynamic policy deduplication preflights each policy over the rolling
+history and skips a policy only when its selected-feature sequence is
+identical to an already-scheduled policy for the same family, mode, and
+representation. The manifest records skipped branches and their equivalents.
+
+The screen can be split across independent workers:
+
+```bash
+python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_feature_family_screen.yaml \
+  --shard-index 0 \
+  --shard-count 4
+```
+
+Each shard appends `shard_NNN_of_NNN` to result, dashboard, chunk, and
+checkpoint folders. Merge meaningful completed bundles after all shards
+finish; exclude contract-smoke artifacts from the public dashboard.
+
 Inspect the count before each launch:
 
 ```bash

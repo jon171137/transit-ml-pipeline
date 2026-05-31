@@ -101,6 +101,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI"))
     parser.add_argument("--mlflow-experiment-name", default=os.environ.get("MLFLOW_EXPERIMENT_NAME", "transit-forecasting-phase-c"))
     parser.add_argument("--mlflow-run-name", default=os.environ.get("MLFLOW_RUN_NAME"))
+    parser.add_argument("--shard-index", type=int, default=int(os.environ.get("EXPERIMENT_SHARD_INDEX", "0")))
+    parser.add_argument("--shard-count", type=int, default=int(os.environ.get("EXPERIMENT_SHARD_COUNT", "1")))
     return parser.parse_args()
 
 
@@ -384,6 +386,12 @@ def policy_representation_variants_from_config(config: dict) -> list[dict]:
             {
                 "feature_policy": variant.get("feature_policy", "none"),
                 "representation_policy": variant.get("representation_policy", "sequence_raw"),
+                "min_family_features": int(variant.get("min_family_features", 0)),
+                "max_family_features": (
+                    int(variant["max_family_features"])
+                    if variant.get("max_family_features") is not None
+                    else None
+                ),
             }
             for variant in configured
         ]
@@ -397,6 +405,35 @@ def policy_representation_variants_from_config(config: dict) -> list[dict]:
         for feature_policy in feature_policies
         for representation_policy in representation_policies
     ]
+
+
+def policy_variant_applies(variant: dict, n_family_features: int) -> bool:
+    if n_family_features < int(variant.get("min_family_features", 0)):
+        return False
+    max_family_features = variant.get("max_family_features")
+    return max_family_features is None or n_family_features <= int(max_family_features)
+
+
+def rolling_policy_signature(
+    full_table: pd.DataFrame,
+    evaluation_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    mode: str,
+    feature_policy: str,
+) -> tuple[tuple[str, ...], ...]:
+    signatures = []
+    for _, eval_row in evaluation_frame.iterrows():
+        train_df = full_table[full_table["date"] < eval_row["date"]].copy()
+        required_cols = [target_col, "seasonal_naive_proxy", *feature_cols]
+        policy_train_df = train_df.dropna(subset=required_cols)
+        if mode == "residual":
+            policy_target = policy_train_df[target_col] - policy_train_df["seasonal_naive_proxy"]
+        else:
+            policy_target = policy_train_df[target_col]
+        policy_result = apply_feature_policy(policy_train_df, feature_cols, policy_target, feature_policy)
+        signatures.append(tuple(policy_result["selected_features"]))
+    return tuple(signatures)
 
 
 def run_config(
@@ -593,6 +630,12 @@ def neural_task_id(
     return config_id(model_config["model_type"], mode, feature_family_name, params, feature_policy)
 
 
+def shard_uri(uri: str | None, shard_index: int, shard_count: int) -> str | None:
+    if not uri or shard_count <= 1:
+        return uri
+    return join_uri(uri, f"shard_{shard_index:03d}_of_{shard_count:03d}")
+
+
 def main() -> int:
     args = parse_args()
     config = read_yaml_config(args.experiment_config)
@@ -626,23 +669,33 @@ def main() -> int:
     seed = int(execution.get("random_seed", 42))
     deterministic = bool(execution.get("deterministic", True))
     checkpointing = execution.get("checkpointing") or {}
-    chunk_dir = checkpointing.get("chunk_dir")
-    checkpoint_dir = checkpointing.get("checkpoint_dir")
+    if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
+        raise ValueError("--shard-index must be between 0 and --shard-count - 1.")
+    results_base_uri = shard_uri(results_base_uri, args.shard_index, args.shard_count)
+    dashboard_base_uri = shard_uri(dashboard_base_uri, args.shard_index, args.shard_count)
+    chunk_dir = shard_uri(checkpointing.get("chunk_dir"), args.shard_index, args.shard_count)
+    checkpoint_dir = shard_uri(checkpointing.get("checkpoint_dir"), args.shard_index, args.shard_count)
     resume = bool(checkpointing.get("resume", False))
     configs = model_configs_from_config(config)
     included_families = (config.get("feature_families") or {}).get("include") or []
     modes = config.get("modes") or ["raw"]
     policy_representation_variants = policy_representation_variants_from_config(config)
+    dynamic_policy_dedup = bool(execution.get("dynamic_policy_dedup", False))
 
     logger.info("Using device: %s", device)
     logger.info("Feature table: %s rows, %s columns", len(feature_table), len(feature_table.columns))
     logger.info("Neural configs: %s", len(configs))
     logger.info("Policy/representation variants: %s", policy_representation_variants)
+    logger.info("Dynamic policy deduplication: %s", dynamic_policy_dedup)
+    logger.info("Shard: %s of %s", args.shard_index, args.shard_count)
     logger.info("Deterministic execution: %s", deterministic)
 
     chunks = []
     completed_rows = []
     failed_rows = []
+    skipped_policy_variants = []
+    skipped_shard_task_count = 0
+    scheduled_task_index = 0
     resumed_count = 0
     for family_name in included_families:
         feature_cols = feature_families[family_name]
@@ -650,10 +703,67 @@ def main() -> int:
         if missing:
             raise ValueError(f"Missing configured features for {family_name}: {missing}")
         for mode in modes:
+            scheduled_policy_signatures: dict[str, dict[tuple[tuple[str, ...], ...], str]] = {}
             for variant in policy_representation_variants:
                 feature_policy = variant["feature_policy"]
                 representation_policy = variant["representation_policy"]
+                if not policy_variant_applies(variant, len(feature_cols)):
+                    logger.info(
+                        "Skipping inapplicable variant %s | %s | %s | %s features",
+                        family_name,
+                        feature_policy,
+                        representation_policy,
+                        len(feature_cols),
+                    )
+                    skipped_policy_variants.append(
+                        {
+                            "feature_family_name": family_name,
+                            "mode": mode,
+                            "feature_policy": feature_policy,
+                            "representation_policy": representation_policy,
+                            "reason": "family_feature_count_outside_variant_bounds",
+                            "n_family_features": len(feature_cols),
+                        }
+                    )
+                    continue
+                if dynamic_policy_dedup:
+                    signature = rolling_policy_signature(
+                        full_table,
+                        evaluation_frame,
+                        feature_cols,
+                        target_col,
+                        mode,
+                        feature_policy,
+                    )
+                    signatures_for_representation = scheduled_policy_signatures.setdefault(representation_policy, {})
+                    equivalent_policy = signatures_for_representation.get(signature)
+                    if equivalent_policy is not None:
+                        logger.info(
+                            "Skipping equivalent policy %s | %s | %s; matches %s",
+                            family_name,
+                            feature_policy,
+                            representation_policy,
+                            equivalent_policy,
+                        )
+                        skipped_policy_variants.append(
+                            {
+                                "feature_family_name": family_name,
+                                "mode": mode,
+                                "feature_policy": feature_policy,
+                                "representation_policy": representation_policy,
+                                "reason": "equivalent_rolling_selected_features",
+                                "equivalent_policy": equivalent_policy,
+                                "n_family_features": len(feature_cols),
+                            }
+                        )
+                        continue
+                    signatures_for_representation[signature] = feature_policy
                 for model_config in configs:
+                    current_task_index = scheduled_task_index
+                    scheduled_task_index += 1
+                    if current_task_index % args.shard_count != args.shard_index:
+                        skipped_shard_task_count += 1
+                        continue
                     task_id = neural_task_id(
                         family_name,
                         mode,
@@ -785,6 +895,13 @@ def main() -> int:
         "resumed_config_count": resumed_count,
         "completed_config_count": len(completed_rows),
         "failed_config_count": len(failed_rows),
+        "dynamic_policy_dedup": dynamic_policy_dedup,
+        "skipped_policy_variant_count": len(skipped_policy_variants),
+        "skipped_policy_variants": skipped_policy_variants,
+        "shard_index": args.shard_index,
+        "shard_count": args.shard_count,
+        "scheduled_task_count_before_sharding": scheduled_task_index,
+        "skipped_shard_task_count": skipped_shard_task_count,
         "champion_config_id": champion["config_id"],
         "selection_rule": champion["selection_rule"],
         "runtime": {
@@ -800,6 +917,8 @@ def main() -> int:
             "checkpoint_dir": checkpoint_dir,
             "resume": resume,
             "runner_contract_version": NEURAL_RUNNER_CONTRACT_VERSION,
+            "shard_index": args.shard_index,
+            "shard_count": args.shard_count,
             "mlflow_tracking_uri": args.mlflow_tracking_uri,
             "mlflow_experiment_name": args.mlflow_experiment_name if args.enable_mlflow else None,
         },
