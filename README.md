@@ -317,6 +317,28 @@ Phase B covers autoregressive models:
   --experiment-config experiment_configs/phase_b_autoregressive_v1.yaml
 ```
 
+Phase C covers PyTorch neural and recurrent sequence models. Install the
+additional neural dependencies separately so the core ECS pipeline image does
+not carry an unnecessary PyTorch layer:
+
+```bash
+python -m pip install -r requirements-neural.txt
+```
+
+Run the local CPU contract smoke test before moving a larger grid to a
+GPU-capable Linux machine or Colab:
+
+```bash
+.venv/bin/python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_smoke.yaml
+```
+
+The Phase C runner currently supports MLP, RNN, GRU, and LSTM builds using
+ordered sequence windows, time-ordered validation rows, early stopping, and
+`ReduceLROnPlateau` learning-rate scheduling. It writes the same portable
+Parquet/JSON contract as Phases A and B so neural results can be merged into
+the DuckDB-backed dashboard export.
+
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic
 exogenous sets. Those outputs can be merged back with Phase A for a unified

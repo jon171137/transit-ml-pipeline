@@ -941,6 +941,8 @@ def model_family_for(model_type: str) -> str:
         return "autoregressive"
     if model_type in {"random_forest", "extra_trees", "xgboost"}:
         return "tree"
+    if model_type in {"mlp", "rnn", "gru", "lstm"}:
+        return "neural_net"
     return "other"
 
 

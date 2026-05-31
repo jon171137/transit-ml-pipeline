@@ -861,3 +861,30 @@
 - Added `requirements-dashboard.txt` and `dashboard/requirements.txt` with the
   minimal dashboard runtime dependencies.
 - Added LinkedIn and GitHub links to the top dashboard banner.
+
+## Phase C Neural CPU Smoke Preparation
+
+- Added `run_neural_models.py` as a PyTorch Phase C sequence-model runner.
+- Added `experiment_configs/phase_c_neural_smoke.yaml` for a tiny CPU-only
+  contract test across MLP, RNN, GRU, and LSTM builds.
+- Kept PyTorch out of the core ECS requirements and added
+  `requirements-neural.txt` for explicit neural/GPU environments.
+- The neural runner uses:
+  - leakage-safe historical sequence windows ending at each as-of month
+  - time-ordered validation rows
+  - early stopping
+  - `ReduceLROnPlateau` learning-rate scheduling
+  - the same Parquet/JSON dashboard contract as Phases A and B
+- Ran the Phase C CPU smoke test:
+  - output: `/private/tmp/transit_phase_c_neural_smoke/results`
+  - `4` neural model configurations
+  - `12` rolling prediction/model-as-of rows
+  - models: MLP, RNN, GRU, LSTM
+  - framework: PyTorch `2.8.0`
+  - device: CPU
+- Loaded the neural results into DuckDB and exported dashboard-shaped
+  artifacts successfully:
+  - DuckDB: `/private/tmp/transit_phase_c_neural_smoke/experiments.duckdb`
+  - export: `/private/tmp/transit_phase_c_neural_smoke/dashboard_from_duckdb`
+- Verified the Streamlit app health endpoint against the neural dashboard
+  export and shut down the temporary test server.
