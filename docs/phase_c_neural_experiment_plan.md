@@ -58,11 +58,37 @@ python run_neural_models.py \
   --experiment-config experiment_configs/phase_c_neural_policy_smoke.yaml
 ```
 
-Inspect the expanded count before launch:
+## Higher-Epoch Refinement
+
+The first Colab screen completed `3,840` rolling model/as-of fits. Most models
+stopped before the `40`-epoch cap, but recurrent models reached the ceiling
+often enough to justify a larger budget in the next stage. The refinement
+config is:
+
+```text
+experiment_configs/phase_c_neural_refinement.yaml
+```
+
+It evaluates:
+
+- `10` shortlisted architecture and parameter combinations
+- `3` representative feature families
+- raw and residual modes
+- `6` selected feature-policy/representation variants
+- `40` quarterly as-of dates
+- `360` model configurations and `14,400` estimated fits
+
+The epoch ceiling increases to `120`, with early stopping patience `12` and
+learning-rate plateau patience `4`. The explicit variant list deliberately
+compares raw sequence inputs under each selector plus PCA branches on the
+unpruned input. This avoids a needlessly large selector-by-PCA Cartesian
+product while preserving the important comparisons.
+
+Inspect the count before each launch:
 
 ```bash
 python plan_neural_experiment.py \
-  --config experiment_configs/phase_c_neural_screening.yaml
+  --config experiment_configs/phase_c_neural_refinement.yaml
 ```
 
 ## Colab Workflow
@@ -95,7 +121,7 @@ Launch only after reviewing the planner output:
 
 ```bash
 python run_neural_models.py \
-  --experiment-config experiment_configs/phase_c_neural_screening.yaml
+  --experiment-config experiment_configs/phase_c_neural_refinement.yaml
 ```
 
 ## Decisions After Screening

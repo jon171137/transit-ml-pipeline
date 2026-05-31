@@ -10,8 +10,8 @@ inputs:
   feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
 
 outputs:
-  results_base_uri: /private/tmp/transit_phase_c_neural_policy_smoke/results
-  dashboard_base_uri: /private/tmp/transit_phase_c_neural_policy_smoke/dashboard
+  results_base_uri: /private/tmp/transit_phase_c_neural_variant_smoke/results
+  dashboard_base_uri: /private/tmp/transit_phase_c_neural_variant_smoke/dashboard
 
 forecast:
   target: upt
@@ -26,8 +26,8 @@ execution:
   random_seed: 42
   deterministic: true
   checkpointing:
-    chunk_dir: /private/tmp/transit_phase_c_neural_policy_smoke/chunks
-    checkpoint_dir: /private/tmp/transit_phase_c_neural_policy_smoke/checkpoints
+    chunk_dir: /private/tmp/transit_phase_c_neural_variant_smoke/chunks
+    checkpoint_dir: /private/tmp/transit_phase_c_neural_variant_smoke/checkpoints
     resume: true
 
 tracking:
@@ -44,16 +44,13 @@ feature_families:
 modes:
   - raw
 
-feature_policies:
-  - none
-  - variance_pruned
-  - corr_pruned
-  - mutual_info_top_30
-
-representation_policies:
-  - sequence_raw
-  - sequence_pca_95
-  - sequence_pca_20
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw}
+  - {feature_policy: none, representation_policy: sequence_pca_95}
+  - {feature_policy: none, representation_policy: sequence_pca_20}
 
 models:
   mlp:

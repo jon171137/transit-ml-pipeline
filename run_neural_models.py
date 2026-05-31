@@ -342,6 +342,28 @@ def model_configs_from_config(config: dict) -> list[dict]:
     return rows
 
 
+def policy_representation_variants_from_config(config: dict) -> list[dict]:
+    configured = config.get("policy_representation_variants") or []
+    if configured:
+        return [
+            {
+                "feature_policy": variant.get("feature_policy", "none"),
+                "representation_policy": variant.get("representation_policy", "sequence_raw"),
+            }
+            for variant in configured
+        ]
+    feature_policies = config.get("feature_policies") or ["none"]
+    representation_policies = config.get("representation_policies") or ["sequence_raw"]
+    return [
+        {
+            "feature_policy": feature_policy,
+            "representation_policy": representation_policy,
+        }
+        for feature_policy in feature_policies
+        for representation_policy in representation_policies
+    ]
+
+
 def run_config(
     full_table: pd.DataFrame,
     evaluation_frame: pd.DataFrame,
@@ -575,14 +597,12 @@ def main() -> int:
     configs = model_configs_from_config(config)
     included_families = (config.get("feature_families") or {}).get("include") or []
     modes = config.get("modes") or ["raw"]
-    feature_policies = config.get("feature_policies") or ["none"]
-    representation_policies = config.get("representation_policies") or ["sequence_raw"]
+    policy_representation_variants = policy_representation_variants_from_config(config)
 
     logger.info("Using device: %s", device)
     logger.info("Feature table: %s rows, %s columns", len(feature_table), len(feature_table.columns))
     logger.info("Neural configs: %s", len(configs))
-    logger.info("Feature policies: %s", feature_policies)
-    logger.info("Representation policies: %s", representation_policies)
+    logger.info("Policy/representation variants: %s", policy_representation_variants)
     logger.info("Deterministic execution: %s", deterministic)
 
     chunks = []
@@ -595,83 +615,84 @@ def main() -> int:
         if missing:
             raise ValueError(f"Missing configured features for {family_name}: {missing}")
         for mode in modes:
-            for feature_policy in feature_policies:
-                for representation_policy in representation_policies:
-                    for model_config in configs:
-                        task_id = neural_task_id(
+            for variant in policy_representation_variants:
+                feature_policy = variant["feature_policy"]
+                representation_policy = variant["representation_policy"]
+                for model_config in configs:
+                    task_id = neural_task_id(
+                        family_name,
+                        mode,
+                        model_config,
+                        feature_policy,
+                        representation_policy,
+                    )
+                    if resume and chunk_dir and chunk_is_complete(chunk_dir, task_id):
+                        logger.info("Resuming completed chunk %s", task_id)
+                        chunks.append(read_chunk_result(chunk_dir, task_id))
+                        resumed_count += 1
+                        continue
+                    logger.info(
+                        "Running %s | %s | %s | %s | %s",
+                        model_config["model_type"],
+                        mode,
+                        family_name,
+                        feature_policy,
+                        representation_policy,
+                    )
+                    try:
+                        chunk = run_config(
+                            full_table,
+                            evaluation_frame,
+                            feature_cols,
                             family_name,
                             mode,
                             model_config,
+                            experiment_id,
+                            os.environ.get("PIPELINE_RUN_ID"),
+                            target_col,
+                            target,
+                            horizon,
+                            int(forecast.get("min_train_rows", 24)),
+                            device,
+                            seed,
+                            deterministic,
                             feature_policy,
                             representation_policy,
                         )
-                        if resume and chunk_dir and chunk_is_complete(chunk_dir, task_id):
-                            logger.info("Resuming completed chunk %s", task_id)
-                            chunks.append(read_chunk_result(chunk_dir, task_id))
-                            resumed_count += 1
-                            continue
-                        logger.info(
-                            "Running %s | %s | %s | %s | %s",
-                            model_config["model_type"],
-                            mode,
-                            family_name,
-                            feature_policy,
-                            representation_policy,
+                        if chunk[0].empty or chunk[1].empty:
+                            raise ValueError("Configuration produced no prediction or model-run rows.")
+                        if chunk_dir:
+                            write_chunk_result(chunk_dir, task_id, chunk)
+                        chunks.append(chunk)
+                        completed_rows.append(
+                            {
+                                "task_id": task_id,
+                                "model_type": model_config["model_type"],
+                                "mode": mode,
+                                "feature_family_name": family_name,
+                                "feature_policy": feature_policy,
+                                "representation_policy": representation_policy,
+                                "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                            }
                         )
-                        try:
-                            chunk = run_config(
-                                full_table,
-                                evaluation_frame,
-                                feature_cols,
-                                family_name,
-                                mode,
-                                model_config,
-                                experiment_id,
-                                os.environ.get("PIPELINE_RUN_ID"),
-                                target_col,
-                                target,
-                                horizon,
-                                int(forecast.get("min_train_rows", 24)),
-                                device,
-                                seed,
-                                deterministic,
-                                feature_policy,
-                                representation_policy,
-                            )
-                            if chunk[0].empty or chunk[1].empty:
-                                raise ValueError("Configuration produced no prediction or model-run rows.")
-                            if chunk_dir:
-                                write_chunk_result(chunk_dir, task_id, chunk)
-                            chunks.append(chunk)
-                            completed_rows.append(
-                                {
-                                    "task_id": task_id,
-                                    "model_type": model_config["model_type"],
-                                    "mode": mode,
-                                    "feature_family_name": family_name,
-                                    "feature_policy": feature_policy,
-                                    "representation_policy": representation_policy,
-                                    "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                            if checkpoint_dir:
-                                append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows[-1:])
-                        except Exception as exc:
-                            logger.exception("Failed configuration %s", task_id)
-                            failed_rows.append(
-                                {
-                                    "task_id": task_id,
-                                    "model_type": model_config["model_type"],
-                                    "mode": mode,
-                                    "feature_family_name": family_name,
-                                    "feature_policy": feature_policy,
-                                    "representation_policy": representation_policy,
-                                    "error": str(exc),
-                                    "failed_at_utc": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                            if checkpoint_dir:
-                                append_checkpoint_rows(checkpoint_dir, "failed_configs.parquet", failed_rows[-1:])
+                        if checkpoint_dir:
+                            append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows[-1:])
+                    except Exception as exc:
+                        logger.exception("Failed configuration %s", task_id)
+                        failed_rows.append(
+                            {
+                                "task_id": task_id,
+                                "model_type": model_config["model_type"],
+                                "mode": mode,
+                                "feature_family_name": family_name,
+                                "feature_policy": feature_policy,
+                                "representation_policy": representation_policy,
+                                "error": str(exc),
+                                "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+                        if checkpoint_dir:
+                            append_checkpoint_rows(checkpoint_dir, "failed_configs.parquet", failed_rows[-1:])
 
     predictions = pd.concat([chunk[0] for chunk in chunks if not chunk[0].empty], ignore_index=True)
     model_runs = pd.concat([chunk[1] for chunk in chunks if not chunk[1].empty], ignore_index=True)

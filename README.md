@@ -367,6 +367,20 @@ with monthly refits. See `docs/phase_c_neural_experiment_plan.md` for the Colab
 transfer workflow and the decisions intentionally deferred until after the
 screen.
 
+After reviewing the architecture screen, inspect the higher-ceiling refinement
+stage:
+
+```bash
+.venv/bin/python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_refinement.yaml
+```
+
+The refinement stage evaluates `360` curated configurations over `40`
+quarterly rolling as-of dates: `14,400` fits. It raises the epoch ceiling to
+`120`, keeps early stopping and learning-rate scheduling, and compares six
+purposeful feature-policy/representation variants without expanding every
+selector across every PCA branch.
+
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic
 exogenous sets. Those outputs can be merged back with Phase A for a unified

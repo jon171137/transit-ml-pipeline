@@ -23,12 +23,27 @@ def month_count(start: str, end: str, frequency_months: int) -> int:
     return int(len(dates[::frequency_months]))
 
 
+def policy_representation_variants(config: dict) -> list[dict]:
+    configured = config.get("policy_representation_variants") or []
+    if configured:
+        return configured
+    feature_policies = config.get("feature_policies") or ["none"]
+    representation_policies = config.get("representation_policies") or ["sequence_raw"]
+    return [
+        {
+            "feature_policy": feature_policy,
+            "representation_policy": representation_policy,
+        }
+        for feature_policy in feature_policies
+        for representation_policy in representation_policies
+    ]
+
+
 def build_summary(config: dict, feature_families_path: Path | None) -> dict:
     forecast = config.get("forecast") or {}
     families = (config.get("feature_families") or {}).get("include") or []
     modes = config.get("modes") or ["raw"]
-    feature_policies = config.get("feature_policies") or ["none"]
-    representation_policies = config.get("representation_policies") or ["sequence_raw"]
+    variants = policy_representation_variants(config)
     as_of_count = month_count(
         forecast["as_of_start"],
         forecast["as_of_end"],
@@ -46,14 +61,12 @@ def build_summary(config: dict, feature_families_path: Path | None) -> dict:
                 "param_count": param_count,
                 "feature_family_count": len(families),
                 "mode_count": len(modes),
-                "feature_policy_count": len(feature_policies),
-                "representation_policy_count": len(representation_policies),
+                "policy_representation_variant_count": len(variants),
                 "model_config_count": (
                     param_count
                     * len(families)
                     * len(modes)
-                    * len(feature_policies)
-                    * len(representation_policies)
+                    * len(variants)
                 ),
             }
         )
@@ -67,8 +80,7 @@ def build_summary(config: dict, feature_families_path: Path | None) -> dict:
         "model_builds": model_rows,
         "feature_families": families,
         "modes": modes,
-        "feature_policies": feature_policies,
-        "representation_policies": representation_policies,
+        "policy_representation_variants": variants,
         "feature_family_validation": {
             "validated": bool(feature_families_path),
             "missing": sorted(set(families) - available),

@@ -945,3 +945,29 @@
   - second execution resumed all `12` completed chunks
 - Loaded the policy/PCA smoke artifacts into DuckDB and exported dashboard
   artifacts successfully.
+
+## Phase C Higher-Epoch Refinement Preparation
+
+- Reviewed the first Colab GPU architecture screen:
+  - `3,840` rolling model/as-of fits completed on a Tesla T4
+  - median trained epochs: `12`
+  - recurrent ceiling-hit rates ranged from approximately `18%` to `23%`
+  - the strongest screen result was an MLP residual model using
+    `history_regime_time`
+- Added explicit `policy_representation_variants` support to
+  `run_neural_models.py` and `plan_neural_experiment.py`.
+- Existing configs remain compatible: when explicit variants are omitted, the
+  runner still expands `feature_policies` by `representation_policies`.
+- Added `experiment_configs/phase_c_neural_refinement.yaml`:
+  - `360` curated neural configurations
+  - `40` quarterly rolling as-of dates
+  - `14,400` estimated fits
+  - epoch ceiling increased to `120`
+  - raw sequence selectors and unpruned PCA branches are compared without a
+    full selector-by-PCA Cartesian expansion
+- Updated the policy/PCA smoke test to exercise `6` explicit variants.
+- Ran the revised CPU smoke test twice:
+  - `18` rolling prediction/model-run rows
+  - the second execution resumed all `6` completed chunks
+- Loaded the revised smoke artifacts into DuckDB and exported dashboard
+  artifacts successfully.
