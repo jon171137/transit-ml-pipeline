@@ -1,0 +1,90 @@
+experiment_id: phase_c_neural_screening
+description: >
+  Reviewable Phase C GPU screening sweep. It uses quarterly as-of dates and a
+  compact curated grid to compare sequence architectures before selected
+  finalists are rerun with a full monthly rolling simulation.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_screening/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_screening
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2016-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 3
+  min_train_rows: 60
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_screening/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_screening/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-screening
+    run_name: phase_c_neural_screening
+
+feature_families:
+  include:
+    - history_regime_time
+    - history_regime_time_all_exog
+    - history_regime_income_pressure
+
+modes:
+  - raw
+  - residual
+
+# Keep the first GPU funnel focused on architecture and layer choices. Once
+# finalists emerge, expand these lists for the policy/representation sweep.
+feature_policies:
+  - none
+
+representation_policies:
+  - sequence_raw
+
+models:
+  mlp:
+    enabled: true
+    param_grid:
+      - {sequence_length: 12, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 64, num_layers: 1, dropout: 0.2, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 36, hidden_size: 64, num_layers: 1, dropout: 0.2, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+
+  rnn:
+    enabled: true
+    param_grid:
+      - {sequence_length: 12, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 64, num_layers: 1, dropout: 0.0, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 36, hidden_size: 64, num_layers: 2, dropout: 0.2, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+
+  gru:
+    enabled: true
+    param_grid:
+      - {sequence_length: 12, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 64, num_layers: 1, dropout: 0.0, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 36, hidden_size: 64, num_layers: 2, dropout: 0.2, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+
+  lstm:
+    enabled: true
+    param_grid:
+      - {sequence_length: 12, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 32, num_layers: 1, dropout: 0.0, learning_rate: 0.001, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 24, hidden_size: 64, num_layers: 1, dropout: 0.0, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}
+      - {sequence_length: 36, hidden_size: 64, num_layers: 2, dropout: 0.2, learning_rate: 0.0003, batch_size: 32, max_epochs: 40, early_stopping_patience: 6, lr_patience: 2, validation_rows: 12}

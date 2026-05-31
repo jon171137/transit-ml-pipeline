@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -30,11 +31,14 @@ except ImportError:
 
 from run_aws_streamlined_models import (
     add_seasonal_naive_proxy,
+    append_checkpoint_rows,
+    apply_feature_policy,
     build_complexity_profile,
     build_dashboard_outputs,
     build_evaluation_frame,
     build_family_summary,
     calculate_metrics,
+    chunk_is_complete,
     config_id,
     current_model_run_id,
     evaluation_period_for,
@@ -44,11 +48,13 @@ from run_aws_streamlined_models import (
     join_uri,
     log_to_mlflow,
     read_json_uri,
+    read_chunk_result,
     read_parquet_uri,
     resolve_output_base_uri,
     safe_ape,
     select_champion,
     validate_feature_table,
+    write_chunk_result,
     write_json_uri,
     write_parquet_uri,
 )
@@ -60,6 +66,7 @@ logger = logging.getLogger(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "jolese-transit-ml-portfolio-367995857052-us-east-1-an")
 MODEL_RESULTS_PREFIX = os.environ.get("MODEL_RESULTS_PREFIX", "model_results/neural")
 DASHBOARD_OUTPUT_PREFIX = os.environ.get("DASHBOARD_OUTPUT_PREFIX", "dashboard/neural")
+NEURAL_RUNNER_CONTRACT_VERSION = "v4_policy_representation_stable_metrics"
 
 FEATURE_IMPORTANCE_COLUMNS = [
     "experiment_id",
@@ -103,12 +110,15 @@ def read_yaml_config(path: str) -> dict:
     return yaml.safe_load(Path(path).read_text()) or {}
 
 
-def set_seed(seed: int) -> None:
+def set_seed(seed: int, deterministic: bool = True) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -170,9 +180,17 @@ def sequence_samples(
     sequences = []
     targets = []
     for index in range(sequence_length - 1, len(ordered)):
-        sequences.append(x_rows[index - sequence_length + 1 : index + 1])
+        start = index - sequence_length + 1
+        if not is_contiguous_month_window(ordered["date"].iloc[start : index + 1]):
+            continue
+        sequences.append(x_rows[start : index + 1])
         targets.append(target[index])
     return np.asarray(sequences, dtype=np.float32), np.asarray(targets, dtype=np.float32)
+
+
+def is_contiguous_month_window(dates: pd.Series) -> bool:
+    month_ordinals = pd.DatetimeIndex(pd.to_datetime(dates)).to_period("M").astype(int)
+    return len(month_ordinals) < 2 or bool(np.all(np.diff(month_ordinals) == 1))
 
 
 def prediction_sequence(frame: pd.DataFrame, as_of_date, feature_cols: list[str], sequence_length: int) -> np.ndarray | None:
@@ -180,7 +198,24 @@ def prediction_sequence(frame: pd.DataFrame, as_of_date, feature_cols: list[str]
     ordered = frame.loc[frame["date"] <= as_of_date, required].dropna().sort_values("date")
     if len(ordered) < sequence_length or pd.Timestamp(ordered.iloc[-1]["date"]) != pd.Timestamp(as_of_date):
         return None
-    return ordered[feature_cols].tail(sequence_length).astype(float).to_numpy(dtype=np.float32)
+    latest = ordered.tail(sequence_length)
+    if not is_contiguous_month_window(latest["date"]):
+        return None
+    return latest[feature_cols].astype(float).to_numpy(dtype=np.float32)
+
+
+def build_representation_transformer(policy: str, scaled_fit_rows: np.ndarray) -> PCA | None:
+    if policy == "sequence_raw":
+        return None
+    if policy == "sequence_pca_95":
+        transformer = PCA(n_components=0.95, svd_solver="full")
+    elif policy == "sequence_pca_20":
+        max_components = min(20, scaled_fit_rows.shape[0], scaled_fit_rows.shape[1])
+        transformer = PCA(n_components=max(1, max_components))
+    else:
+        raise ValueError(f"Unsupported neural representation policy: {policy}")
+    transformer.fit(scaled_fit_rows)
+    return transformer
 
 
 def fit_model(
@@ -189,7 +224,8 @@ def fit_model(
     model_type: str,
     params: dict,
     device: torch.device,
-) -> tuple[SequenceRegressor, StandardScaler, dict]:
+    representation_policy: str,
+) -> tuple[SequenceRegressor, StandardScaler, PCA | None, StandardScaler, dict]:
     validation_rows = max(1, min(int(params.get("validation_rows", 6)), len(x_train) // 4))
     if len(x_train) <= validation_rows:
         raise ValueError("Not enough sequence samples to create a time-ordered validation window.")
@@ -198,22 +234,37 @@ def fit_model(
 
     scaler = StandardScaler()
     scaler.fit(x_fit.reshape(-1, x_fit.shape[-1]))
+    target_scaler = StandardScaler()
+    target_scaler.fit(y_fit.reshape(-1, 1))
 
-    def scaled(values: np.ndarray) -> np.ndarray:
+    representation_transformer = build_representation_transformer(
+        representation_policy,
+        scaler.transform(x_fit.reshape(-1, x_fit.shape[-1])),
+    )
+
+    def represented(values: np.ndarray) -> np.ndarray:
         shape = values.shape
-        return scaler.transform(values.reshape(-1, shape[-1])).reshape(shape).astype(np.float32)
+        rows = scaler.transform(values.reshape(-1, shape[-1]))
+        if representation_transformer is not None:
+            rows = representation_transformer.transform(rows)
+        return rows.reshape(shape[0], shape[1], -1).astype(np.float32)
 
-    x_fit_tensor = torch.tensor(scaled(x_fit))
-    y_fit_tensor = torch.tensor(y_fit, dtype=torch.float32)
-    x_val_tensor = torch.tensor(scaled(x_val), device=device)
-    y_val_tensor = torch.tensor(y_val, dtype=torch.float32, device=device)
+    represented_fit = represented(x_fit)
+    x_fit_tensor = torch.tensor(represented_fit)
+    y_fit_tensor = torch.tensor(target_scaler.transform(y_fit.reshape(-1, 1)).ravel(), dtype=torch.float32)
+    x_val_tensor = torch.tensor(represented(x_val), device=device)
+    y_val_tensor = torch.tensor(
+        target_scaler.transform(y_val.reshape(-1, 1)).ravel(),
+        dtype=torch.float32,
+        device=device,
+    )
     loader = DataLoader(
         TensorDataset(x_fit_tensor, y_fit_tensor),
         batch_size=int(params.get("batch_size", 16)),
         shuffle=False,
     )
 
-    model = SequenceRegressor(model_type, x_train.shape[-1], params).to(device)
+    model = SequenceRegressor(model_type, represented_fit.shape[-1], params).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(params.get("learning_rate", 1e-3)))
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -254,21 +305,32 @@ def fit_model(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model, scaler, {
+    return model, scaler, representation_transformer, target_scaler, {
         "epochs_trained": epoch,
         "best_epoch": best_epoch,
         "validation_loss": best_loss,
         "early_stopping_used": epoch < max_epochs,
+        "n_representation_features": int(represented_fit.shape[-1]),
     }
 
 
-def predict(model: SequenceRegressor, scaler: StandardScaler, sequence: np.ndarray, device: torch.device) -> float:
+def predict(
+    model: SequenceRegressor,
+    scaler: StandardScaler,
+    representation_transformer: PCA | None,
+    target_scaler: StandardScaler,
+    sequence: np.ndarray,
+    device: torch.device,
+) -> float:
     shape = sequence.shape
-    scaled = scaler.transform(sequence.reshape(-1, shape[-1])).reshape(shape).astype(np.float32)
-    tensor = torch.tensor(scaled[None, :, :], device=device)
+    represented = scaler.transform(sequence.reshape(-1, shape[-1]))
+    if representation_transformer is not None:
+        represented = representation_transformer.transform(represented)
+    tensor = torch.tensor(represented[None, :, :].astype(np.float32), device=device)
     model.eval()
     with torch.no_grad():
-        return float(model(tensor).item())
+        scaled_prediction = float(model(tensor).item())
+    return float(target_scaler.inverse_transform([[scaled_prediction]])[0, 0])
 
 
 def model_configs_from_config(config: dict) -> list[dict]:
@@ -295,32 +357,60 @@ def run_config(
     min_train_rows: int,
     device: torch.device,
     seed: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    deterministic: bool,
+    feature_policy: str,
+    representation_policy: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     model_type = config["model_type"]
     params = dict(config["params"])
     sequence_length = int(params.get("sequence_length", 12))
     params["sequence_length"] = sequence_length
     hyperparameters_json = json.dumps(params, sort_keys=True)
-    run_config_id = config_id(model_type, mode, feature_family_name, params)
-    current_feature_set_id = feature_set_id(feature_family_name, mode, feature_cols, "none")
-    feature_sets = [feature_set_row(experiment_id, current_feature_set_id, feature_family_name, mode, "none", feature_cols)]
+    id_params = {**params, "representation_policy": representation_policy}
+    run_config_id = config_id(model_type, mode, feature_family_name, id_params, feature_policy)
+    current_feature_set_id = feature_set_id(feature_family_name, mode, feature_cols, feature_policy)
+    feature_sets = [
+        feature_set_row(
+            experiment_id,
+            current_feature_set_id,
+            feature_family_name,
+            mode,
+            feature_policy,
+            feature_cols,
+        )
+    ]
     predictions = []
     model_runs = []
 
     for _, eval_row in evaluation_frame.iterrows():
         as_of_date = eval_row["date"]
         train_df = full_table[full_table["date"] < as_of_date].copy()
-        x_train, y_train = sequence_samples(train_df, feature_cols, target_col, sequence_length, mode)
-        sequence = prediction_sequence(full_table, as_of_date, feature_cols, sequence_length)
+        required_cols = [target_col, "seasonal_naive_proxy", *feature_cols]
+        policy_train_df = train_df.dropna(subset=required_cols)
+        if mode == "residual":
+            policy_target = policy_train_df[target_col] - policy_train_df["seasonal_naive_proxy"]
+        else:
+            policy_target = policy_train_df[target_col]
+        policy_result = apply_feature_policy(policy_train_df, feature_cols, policy_target, feature_policy)
+        selected_feature_cols = policy_result["selected_features"]
+        x_train, y_train = sequence_samples(train_df, selected_feature_cols, target_col, sequence_length, mode)
+        sequence = prediction_sequence(full_table, as_of_date, selected_feature_cols, sequence_length)
         if len(x_train) < min_train_rows or sequence is None:
             continue
 
-        set_seed(seed)
+        set_seed(seed, deterministic=deterministic)
         started = time.perf_counter()
-        model, scaler, fit_metadata = fit_model(x_train, y_train, model_type, params, device)
+        model, scaler, representation_transformer, target_scaler, fit_metadata = fit_model(
+            x_train,
+            y_train,
+            model_type,
+            params,
+            device,
+            representation_policy,
+        )
         train_seconds = time.perf_counter() - started
         predict_started = time.perf_counter()
-        prediction = predict(model, scaler, sequence, device)
+        prediction = predict(model, scaler, representation_transformer, target_scaler, sequence, device)
         predict_seconds = time.perf_counter() - predict_started
 
         naive = float(eval_row["seasonal_naive_proxy"])
@@ -346,13 +436,13 @@ def run_config(
             "ensemble_method": "",
             "mode": mode,
             "feature_family_name": feature_family_name,
-            "feature_policy": "none",
+            "feature_policy": feature_policy,
             "feature_set_id": current_feature_set_id,
-            "n_features": len(feature_cols),
-            "n_features_before_policy": len(feature_cols),
-            "n_features_after_policy": len(feature_cols),
-            "representation_policy": "sequence_raw",
-            "n_representation_features": len(feature_cols),
+            "n_features": len(selected_feature_cols),
+            "n_features_before_policy": int(policy_result["n_features_before_policy"]),
+            "n_features_after_policy": int(policy_result["n_features_after_policy"]),
+            "representation_policy": representation_policy,
+            "n_representation_features": fit_metadata["n_representation_features"],
             "sequence_length": sequence_length,
             "sequence_stride": 1,
             "prediction_head": "direct_horizon",
@@ -383,10 +473,17 @@ def run_config(
                 **common,
                 "params": hyperparameters_json,
                 "hyperparameters_json": hyperparameters_json,
-                "selected_feature_names_json": json.dumps(feature_cols, sort_keys=True),
-                "dropped_feature_names_json": "[]",
-                "feature_policy_params_json": "{}",
-                "representation_params_json": json.dumps({"sequence_length": sequence_length}, sort_keys=True),
+                "selected_feature_names_json": json.dumps(selected_feature_cols, sort_keys=True),
+                "dropped_feature_names_json": json.dumps(policy_result["dropped_features"], sort_keys=True),
+                "feature_policy_params_json": json.dumps(policy_result["policy_params"], sort_keys=True),
+                "representation_params_json": json.dumps(
+                    {
+                        "sequence_length": sequence_length,
+                        "target_scaling": "standard",
+                        "n_representation_features": fit_metadata["n_representation_features"],
+                    },
+                    sort_keys=True,
+                ),
                 "training_window_months": np.nan,
                 "validation_strategy": "rolling_as_of_ordered_holdout",
                 "early_stopping_used": fit_metadata["early_stopping_used"],
@@ -408,7 +505,12 @@ def run_config(
             }
         )
 
-    return pd.DataFrame(predictions), pd.DataFrame(model_runs), pd.DataFrame(feature_sets)
+    return (
+        pd.DataFrame(predictions),
+        pd.DataFrame(model_runs),
+        pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS),
+        pd.DataFrame(feature_sets),
+    )
 
 
 def namespace_for_mlflow(args: argparse.Namespace, config: dict) -> argparse.Namespace:
@@ -418,6 +520,20 @@ def namespace_for_mlflow(args: argparse.Namespace, config: dict) -> argparse.Nam
     args.mlflow_experiment_name = tracking.get("experiment_name", args.mlflow_experiment_name)
     args.mlflow_run_name = tracking.get("run_name", args.mlflow_run_name)
     return args
+
+
+def neural_task_id(
+    feature_family_name: str,
+    mode: str,
+    model_config: dict,
+    feature_policy: str,
+    representation_policy: str,
+) -> str:
+    params = dict(model_config["params"])
+    params["sequence_length"] = int(params.get("sequence_length", 12))
+    params["runner_contract_version"] = NEURAL_RUNNER_CONTRACT_VERSION
+    params["representation_policy"] = representation_policy
+    return config_id(model_config["model_type"], mode, feature_family_name, params, feature_policy)
 
 
 def main() -> int:
@@ -451,46 +567,121 @@ def main() -> int:
     dashboard_base_uri = resolve_output_base_uri(outputs.get("dashboard_base_uri"), args.bucket, args.dashboard_prefix, experiment_id)
     device = resolve_device(str(execution.get("device", "auto")))
     seed = int(execution.get("random_seed", 42))
+    deterministic = bool(execution.get("deterministic", True))
+    checkpointing = execution.get("checkpointing") or {}
+    chunk_dir = checkpointing.get("chunk_dir")
+    checkpoint_dir = checkpointing.get("checkpoint_dir")
+    resume = bool(checkpointing.get("resume", False))
     configs = model_configs_from_config(config)
     included_families = (config.get("feature_families") or {}).get("include") or []
     modes = config.get("modes") or ["raw"]
+    feature_policies = config.get("feature_policies") or ["none"]
+    representation_policies = config.get("representation_policies") or ["sequence_raw"]
 
     logger.info("Using device: %s", device)
     logger.info("Feature table: %s rows, %s columns", len(feature_table), len(feature_table.columns))
     logger.info("Neural configs: %s", len(configs))
+    logger.info("Feature policies: %s", feature_policies)
+    logger.info("Representation policies: %s", representation_policies)
+    logger.info("Deterministic execution: %s", deterministic)
 
     chunks = []
+    completed_rows = []
+    failed_rows = []
+    resumed_count = 0
     for family_name in included_families:
         feature_cols = feature_families[family_name]
         missing = [column for column in feature_cols if column not in full_table]
         if missing:
             raise ValueError(f"Missing configured features for {family_name}: {missing}")
         for mode in modes:
-            for model_config in configs:
-                logger.info("Running %s | %s | %s", model_config["model_type"], mode, family_name)
-                chunks.append(
-                    run_config(
-                        full_table,
-                        evaluation_frame,
-                        feature_cols,
-                        family_name,
-                        mode,
-                        model_config,
-                        experiment_id,
-                        os.environ.get("PIPELINE_RUN_ID"),
-                        target_col,
-                        target,
-                        horizon,
-                        int(forecast.get("min_train_rows", 24)),
-                        device,
-                        seed,
-                    )
-                )
+            for feature_policy in feature_policies:
+                for representation_policy in representation_policies:
+                    for model_config in configs:
+                        task_id = neural_task_id(
+                            family_name,
+                            mode,
+                            model_config,
+                            feature_policy,
+                            representation_policy,
+                        )
+                        if resume and chunk_dir and chunk_is_complete(chunk_dir, task_id):
+                            logger.info("Resuming completed chunk %s", task_id)
+                            chunks.append(read_chunk_result(chunk_dir, task_id))
+                            resumed_count += 1
+                            continue
+                        logger.info(
+                            "Running %s | %s | %s | %s | %s",
+                            model_config["model_type"],
+                            mode,
+                            family_name,
+                            feature_policy,
+                            representation_policy,
+                        )
+                        try:
+                            chunk = run_config(
+                                full_table,
+                                evaluation_frame,
+                                feature_cols,
+                                family_name,
+                                mode,
+                                model_config,
+                                experiment_id,
+                                os.environ.get("PIPELINE_RUN_ID"),
+                                target_col,
+                                target,
+                                horizon,
+                                int(forecast.get("min_train_rows", 24)),
+                                device,
+                                seed,
+                                deterministic,
+                                feature_policy,
+                                representation_policy,
+                            )
+                            if chunk[0].empty or chunk[1].empty:
+                                raise ValueError("Configuration produced no prediction or model-run rows.")
+                            if chunk_dir:
+                                write_chunk_result(chunk_dir, task_id, chunk)
+                            chunks.append(chunk)
+                            completed_rows.append(
+                                {
+                                    "task_id": task_id,
+                                    "model_type": model_config["model_type"],
+                                    "mode": mode,
+                                    "feature_family_name": family_name,
+                                    "feature_policy": feature_policy,
+                                    "representation_policy": representation_policy,
+                                    "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                                }
+                            )
+                            if checkpoint_dir:
+                                append_checkpoint_rows(checkpoint_dir, "completed_configs.parquet", completed_rows[-1:])
+                        except Exception as exc:
+                            logger.exception("Failed configuration %s", task_id)
+                            failed_rows.append(
+                                {
+                                    "task_id": task_id,
+                                    "model_type": model_config["model_type"],
+                                    "mode": mode,
+                                    "feature_family_name": family_name,
+                                    "feature_policy": feature_policy,
+                                    "representation_policy": representation_policy,
+                                    "error": str(exc),
+                                    "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+                                }
+                            )
+                            if checkpoint_dir:
+                                append_checkpoint_rows(checkpoint_dir, "failed_configs.parquet", failed_rows[-1:])
 
     predictions = pd.concat([chunk[0] for chunk in chunks if not chunk[0].empty], ignore_index=True)
     model_runs = pd.concat([chunk[1] for chunk in chunks if not chunk[1].empty], ignore_index=True)
-    feature_sets = pd.concat([chunk[2] for chunk in chunks if not chunk[2].empty], ignore_index=True).drop_duplicates("feature_set_id")
-    feature_importance = pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS)
+    feature_importance_chunks = [chunk[2] for chunk in chunks if not chunk[2].empty]
+    feature_importance = (
+        pd.concat(feature_importance_chunks, ignore_index=True)
+        if feature_importance_chunks
+        else pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS)
+    )
+    feature_sets = pd.concat([chunk[3] for chunk in chunks if not chunk[3].empty], ignore_index=True).drop_duplicates("feature_set_id")
     if predictions.empty:
         raise ValueError("No neural predictions were produced.")
 
@@ -527,13 +718,17 @@ def main() -> int:
         "as_of_frequency_months": int(forecast.get("as_of_frequency_months", 1)),
         "models": sorted(set(metrics["model_type"])),
         "modes": sorted(set(metrics["mode"])),
-        "feature_policies": ["none"],
+        "feature_policies": sorted(set(metrics["feature_policy"])),
+        "representation_policies": sorted(set(model_runs["representation_policy"])),
         "requested_feature_families": included_families,
         "model_config_count": int(len(metrics[metrics["evaluation_scope"] == "overall"])),
         "prediction_count": int(len(predictions)),
         "model_run_count": int(len(model_runs)),
         "metric_count": int(len(metrics)),
         "complexity_profile_count": int(len(complexity_profile)),
+        "resumed_config_count": resumed_count,
+        "completed_config_count": len(completed_rows),
+        "failed_config_count": len(failed_rows),
         "champion_config_id": champion["config_id"],
         "selection_rule": champion["selection_rule"],
         "runtime": {
@@ -544,6 +739,11 @@ def main() -> int:
             "device": str(device),
             "gpu_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
             "cuda_version": torch.version.cuda or "",
+            "deterministic": deterministic,
+            "chunk_dir": chunk_dir,
+            "checkpoint_dir": checkpoint_dir,
+            "resume": resume,
+            "runner_contract_version": NEURAL_RUNNER_CONTRACT_VERSION,
             "mlflow_tracking_uri": args.mlflow_tracking_uri,
             "mlflow_experiment_name": args.mlflow_experiment_name if args.enable_mlflow else None,
         },

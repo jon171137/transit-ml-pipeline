@@ -888,3 +888,60 @@
   - export: `/private/tmp/transit_phase_c_neural_smoke/dashboard_from_duckdb`
 - Verified the Streamlit app health endpoint against the neural dashboard
   export and shut down the temporary test server.
+
+## Phase C Neural GPU Screening Preparation
+
+- Confirmed the Phase C smoke test in Google Colab on a Tesla T4 GPU:
+  - PyTorch `2.11.0+cu128`
+  - CUDA runtime `12.8`
+  - CUDA available
+  - all `4` Phase C model builds completed and wrote portable artifacts
+- Hardened the neural runner before a larger GPU experiment:
+  - standardized targets using a scaler fit only on each training window
+  - required sequence rows to represent consecutive calendar months
+  - added deterministic PyTorch execution controls
+  - added per-configuration chunk artifacts and resume support
+  - versioned chunk identifiers to prevent reuse after preprocessing changes
+  - recorded checkpoint and resume behavior in the experiment manifest
+- Updated shared complexity profiling with neural-aware model-size proxies for
+  MLP, RNN, GRU, and LSTM builds.
+- Added `plan_neural_experiment.py` and
+  `experiment_configs/phase_c_neural_screening.yaml`.
+- The draft screening funnel expands to:
+  - `96` neural model configurations
+  - `40` quarterly rolling as-of dates
+  - `3,840` estimated fits
+- Re-ran the CPU smoke test twice:
+  - the first run completed all four configurations and wrote chunks
+  - the second run resumed all four chunks without retraining
+- Added `docs/phase_c_neural_experiment_plan.md` with the Colab transfer,
+  persistence, review, and finalist workflow.
+
+## Phase C Neural Feature Policies And PCA
+
+- Extended `run_neural_models.py` so Phase C configurations can branch across
+  training-window-safe feature policies and sequence representations.
+- Neural feature policies now supported:
+  - `none`
+  - `variance_pruned`
+  - `corr_pruned`
+  - `mutual_info_top_30`
+- Neural representations now supported:
+  - `sequence_raw`
+  - `sequence_pca_20`
+  - `sequence_pca_95`
+- Feature selectors are refit inside every historical as-of training window.
+- PCA is fitted after feature selection using only each fit window, then
+  applied to validation and prediction rows.
+- Stabilized metric aggregation when a selector chooses different columns at
+  different as-of dates:
+  - the configuration retains one stable feature-set identity
+  - each `model_runs.parquet` row records the actual selected columns
+- Added `experiment_configs/phase_c_neural_policy_smoke.yaml`.
+- Ran the Phase C policy/PCA CPU smoke test twice:
+  - `12` configuration branches
+  - `36` rolling prediction/model-run rows
+  - `12` overall metric rows
+  - second execution resumed all `12` completed chunks
+- Loaded the policy/PCA smoke artifacts into DuckDB and exported dashboard
+  artifacts successfully.

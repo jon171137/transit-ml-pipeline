@@ -333,11 +333,39 @@ GPU-capable Linux machine or Colab:
   --experiment-config experiment_configs/phase_c_neural_smoke.yaml
 ```
 
+Run the policy and PCA contract smoke test as well:
+
+```bash
+.venv/bin/python run_neural_models.py \
+  --experiment-config experiment_configs/phase_c_neural_policy_smoke.yaml
+```
+
 The Phase C runner currently supports MLP, RNN, GRU, and LSTM builds using
 ordered sequence windows, time-ordered validation rows, early stopping, and
-`ReduceLROnPlateau` learning-rate scheduling. It writes the same portable
-Parquet/JSON contract as Phases A and B so neural results can be merged into
-the DuckDB-backed dashboard export.
+`ReduceLROnPlateau` learning-rate scheduling. Feature and target scalers are
+fit only on the training portion of each historical as-of window. Completed
+model configurations are written to resumable chunk artifacts so an
+interrupted GPU session can continue without repeating finished work. The
+runner writes the same portable Parquet/JSON contract as Phases A and B so
+neural results can be merged into the DuckDB-backed dashboard export.
+Neural configs can branch across training-window-safe feature policies and
+sequence representations. Implemented feature policies are `none`,
+`variance_pruned`, `corr_pruned`, and `mutual_info_top_30`. Implemented
+representations are `sequence_raw`, `sequence_pca_20`, and `sequence_pca_95`.
+
+Review the compact GPU-screening grid before launching it:
+
+```bash
+.venv/bin/python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_screening.yaml
+```
+
+The draft screening stage evaluates `96` neural configurations over `40`
+quarterly rolling as-of dates: `3,840` fits. Its purpose is to identify
+promising architectures and parameter neighborhoods before rerunning finalists
+with monthly refits. See `docs/phase_c_neural_experiment_plan.md` for the Colab
+transfer workflow and the decisions intentionally deferred until after the
+screen.
 
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic

@@ -25,6 +25,11 @@ forecast:
 execution:
   device: cpu
   random_seed: 42
+  deterministic: true
+  checkpointing:
+    chunk_dir: /private/tmp/transit_phase_c_neural_smoke/chunks
+    checkpoint_dir: /private/tmp/transit_phase_c_neural_smoke/checkpoints
+    resume: true
 
 tracking:
   mlflow:

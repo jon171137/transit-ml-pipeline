@@ -1,0 +1,71 @@
+experiment_id: phase_c_neural_policy_smoke
+description: >
+  Tiny CPU-only contract test for training-window-safe neural feature policies
+  and PCA sequence representations.
+
+status: smoke
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: /private/tmp/transit_phase_c_neural_policy_smoke/results
+  dashboard_base_uri: /private/tmp/transit_phase_c_neural_policy_smoke/dashboard
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2024-01-01
+  as_of_end: 2024-03-01
+  as_of_frequency_months: 1
+  min_train_rows: 24
+
+execution:
+  device: cpu
+  random_seed: 42
+  deterministic: true
+  checkpointing:
+    chunk_dir: /private/tmp/transit_phase_c_neural_policy_smoke/chunks
+    checkpoint_dir: /private/tmp/transit_phase_c_neural_policy_smoke/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-policy-smoke
+    run_name: phase_c_neural_policy_smoke
+
+feature_families:
+  include:
+    - history_regime_income_pressure
+
+modes:
+  - raw
+
+feature_policies:
+  - none
+  - variance_pruned
+  - corr_pruned
+  - mutual_info_top_30
+
+representation_policies:
+  - sequence_raw
+  - sequence_pca_95
+  - sequence_pca_20
+
+models:
+  mlp:
+    enabled: true
+    param_grid:
+      - sequence_length: 12
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
+        learning_rate: 0.001
+        batch_size: 16
+        max_epochs: 2
+        early_stopping_patience: 1
+        lr_patience: 1
+        validation_rows: 6

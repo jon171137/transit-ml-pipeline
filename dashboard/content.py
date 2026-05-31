@@ -365,10 +365,14 @@ they do not use future information.
 
 `representation_policy` is reserved for transforms that change the model input
 representation rather than merely selecting columns. Examples include
-`tabular_raw`, `pca_20`, `pca_95`, `sequence_raw`, `sequence_pca_20`, or a
-future learned latent representation. This is especially important for neural
-net and RNN-style experiments, where sequence length and compressed feature
-spaces become part of the model design.
+`tabular_raw`, `pca_20`, `pca_95`, `sequence_raw`, `sequence_pca_20`,
+`sequence_pca_95`, or a future learned latent representation. For Phase C,
+`sequence_pca_20` retains up to 20 principal components and `sequence_pca_95`
+retains enough components to explain 95 percent of the fit-window variance.
+PCA is refit inside each historical training window after any feature policy is
+applied. This is especially important for neural-net and RNN-style experiments,
+where sequence length and compressed feature spaces become part of the model
+design.
 
 `complexity_score` is a normalized comparison score using selected feature
 count, a model-size proxy, and training time. It is useful for comparing models

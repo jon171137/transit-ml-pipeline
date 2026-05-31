@@ -1738,6 +1738,17 @@ def model_size_proxy(row: pd.Series) -> float:
         return max(1.0, estimators * max(1.0, depth) * max(0.1, colsample))
     if model_type in {"arima", "sarima", "sarimax"}:
         return max(1.0, order_sum(params, "order") + order_sum(params, "seasonal_order") + n_features)
+    if model_type == "mlp":
+        sequence_length = numeric_param(params, "sequence_length", 1.0)
+        hidden_size = numeric_param(params, "hidden_size", 1.0)
+        return max(1.0, sequence_length * n_features * hidden_size + hidden_size)
+    if model_type in {"rnn", "gru", "lstm"}:
+        hidden_size = numeric_param(params, "hidden_size", 1.0)
+        num_layers = numeric_param(params, "num_layers", 1.0)
+        gate_count = {"rnn": 1.0, "gru": 3.0, "lstm": 4.0}[model_type]
+        first_layer = gate_count * (n_features * hidden_size + hidden_size * hidden_size + hidden_size)
+        later_layers = max(0.0, num_layers - 1.0) * gate_count * (2.0 * hidden_size**2 + hidden_size)
+        return max(1.0, first_layer + later_layers + hidden_size)
     return max(1.0, n_features)
 
 
