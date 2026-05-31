@@ -1,0 +1,98 @@
+experiment_id: phase_c_neural_smoke
+description: >
+  Tiny CPU-only PyTorch smoke test for the Phase C neural runner. It verifies
+  ordered sequence windows, leakage-safe rolling fits, early stopping,
+  learning-rate scheduling, and the shared Parquet/JSON dashboard contract.
+
+status: smoke
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: /private/tmp/transit_phase_c_neural_smoke/results
+  dashboard_base_uri: /private/tmp/transit_phase_c_neural_smoke/dashboard
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2024-01-01
+  as_of_end: 2024-03-01
+  as_of_frequency_months: 1
+  min_train_rows: 24
+
+execution:
+  device: cpu
+  random_seed: 42
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-smoke
+    run_name: phase_c_neural_smoke
+
+feature_families:
+  include:
+    - history_regime_time
+
+modes:
+  - raw
+
+models:
+  mlp:
+    enabled: true
+    param_grid:
+      - sequence_length: 12
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
+        learning_rate: 0.001
+        batch_size: 16
+        max_epochs: 3
+        early_stopping_patience: 2
+        lr_patience: 1
+        validation_rows: 6
+
+  rnn:
+    enabled: true
+    param_grid:
+      - sequence_length: 12
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
+        learning_rate: 0.001
+        batch_size: 16
+        max_epochs: 3
+        early_stopping_patience: 2
+        lr_patience: 1
+        validation_rows: 6
+
+  gru:
+    enabled: true
+    param_grid:
+      - sequence_length: 12
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
+        learning_rate: 0.001
+        batch_size: 16
+        max_epochs: 3
+        early_stopping_patience: 2
+        lr_patience: 1
+        validation_rows: 6
+
+  lstm:
+    enabled: true
+    param_grid:
+      - sequence_length: 12
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
+        learning_rate: 0.001
+        batch_size: 16
+        max_epochs: 3
+        early_stopping_patience: 2
+        lr_patience: 1
+        validation_rows: 6

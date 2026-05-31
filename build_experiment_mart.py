@@ -13,6 +13,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
 
 RESULT_TABLES = {
@@ -40,6 +41,30 @@ JSON_ARTIFACTS = {
     "champion_selection": "champion_selection.json",
     "experiment_manifest": "experiment_manifest.json",
     "batch_manifest": "batch_manifest.json",
+}
+
+EMPTY_TABLE_SCHEMAS = {
+    "feature_importance": {
+        "feature_name": "VARCHAR",
+        "importance_type": "VARCHAR",
+        "importance": "DOUBLE",
+        "importance_abs": "DOUBLE",
+        "experiment_id": "VARCHAR",
+        "pipeline_run_id": "VARCHAR",
+        "model_run_id": "VARCHAR",
+        "model_config_id": "VARCHAR",
+        "prediction_id": "VARCHAR",
+        "config_id": "VARCHAR",
+        "as_of_date": "VARCHAR",
+        "model_family": "VARCHAR",
+        "model_build": "VARCHAR",
+        "model_type": "VARCHAR",
+        "mode": "VARCHAR",
+        "feature_family_name": "VARCHAR",
+        "feature_policy": "VARCHAR",
+        "feature_set_id": "VARCHAR",
+        "rank": "BIGINT",
+    },
 }
 
 
@@ -93,6 +118,13 @@ def sql_string(value: str) -> str:
 def load_parquet_table(con: duckdb.DuckDBPyConnection, table_name: str, path: Path) -> int:
     if not path.exists():
         con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM (SELECT NULL WHERE FALSE)")
+        return 0
+    if table_name in EMPTY_TABLE_SCHEMAS and pq.ParquetFile(path).metadata.num_columns == 0:
+        columns = ", ".join(
+            f"{column_name} {column_type}"
+            for column_name, column_type in EMPTY_TABLE_SCHEMAS[table_name].items()
+        )
+        con.execute(f"CREATE OR REPLACE TABLE {table_name} ({columns})")
         return 0
     con.execute(
         f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_parquet({sql_string(str(path))})"

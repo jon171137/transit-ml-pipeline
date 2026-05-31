@@ -113,6 +113,11 @@ MODEL_ORDER = {
     "sarimax": 9,
 }
 SIMPLICITY_THRESHOLD = 0.02
+SCORE_RECIPES = {
+    "typical": {"mae_weight": 0.90, "rmse_weight": 0.10},
+    "balanced": {"mae_weight": 0.75, "rmse_weight": 0.25},
+    "large_error": {"mae_weight": 0.50, "rmse_weight": 0.50},
+}
 FEATURE_POLICIES = [
     "none",
     "corr_pruned",
@@ -904,6 +909,8 @@ def model_family_for(model_type: str) -> str:
         return "tree"
     if model_type in {"arima", "sarima", "sarimax"}:
         return "autoregressive"
+    if model_type in {"mlp", "rnn", "gru", "lstm"}:
+        return "neural_net"
     return "other"
 
 
@@ -926,6 +933,8 @@ def framework_for(model_type: str) -> str:
         return "xgboost"
     if model_type in {"arima", "sarima", "sarimax"}:
         return "statsmodels"
+    if model_type in {"mlp", "rnn", "gru", "lstm"}:
+        return "pytorch"
     if model_type in {"naive", "ridge", "lasso", "elastic_net", "random_forest", "extra_trees"}:
         return "sklearn"
     return ""
@@ -1566,43 +1575,46 @@ def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
         r2 = float(r2_score(actual, pred)) if len(group) > 1 else np.nan
         n_features = int(group["n_features"].max())
         r2_adjusted = adjusted_r2_score_value(r2, len(group), n_features, model_family)
-        rows.append(
-            {
-                "experiment_id": group["experiment_id"].iloc[0],
-                "pipeline_run_id": group["pipeline_run_id"].iloc[0],
-                "model_config_id": model_config_id,
-                "config_id": config_id_value,
-                "evaluation_scope": evaluation_scope,
-                "evaluation_start_date": group["target_date"].min(),
-                "evaluation_end_date": group["target_date"].max(),
-                "target": group["target"].iloc[0],
-                "horizon": int(group["horizon"].iloc[0]),
-                "model_family": model_family,
-                "model_build": model_build,
-                "model_type": model_type,
-                "ensemble_method": ensemble_method,
-                "mode": mode,
-                "feature_family_name": feature_family_name,
-                "feature_policy": feature_policy,
-                "feature_set_id": feature_set_id_value,
-                "n_predictions": int(len(group)),
-                "n_features": n_features,
-                "mae": float(mae),
-                "rmse": float(rmse),
-                "r2": r2,
-                "r2_adjusted": r2_adjusted,
-                "diracc": directional_accuracy(actual, pred),
-                "mae_naive": float(mae_naive),
-                "rmse_naive": float(rmse_naive),
-                "mae_improvement_vs_naive": float(mae_naive - mae),
-                "rmse_improvement_vs_naive": float(rmse_naive - rmse),
-                "selection_score": float(0.75 * mae + 0.25 * rmse),
-                "rank": 0,
-                "metric_extras_json": "{}",
-                "avg_train_seconds": float(group["train_seconds"].mean()),
-                "total_train_seconds": float(group["train_seconds"].sum()),
-            }
-        )
+        metric_row = {
+            "experiment_id": group["experiment_id"].iloc[0],
+            "pipeline_run_id": group["pipeline_run_id"].iloc[0],
+            "model_config_id": model_config_id,
+            "config_id": config_id_value,
+            "evaluation_scope": evaluation_scope,
+            "evaluation_start_date": group["target_date"].min(),
+            "evaluation_end_date": group["target_date"].max(),
+            "target": group["target"].iloc[0],
+            "horizon": int(group["horizon"].iloc[0]),
+            "model_family": model_family,
+            "model_build": model_build,
+            "model_type": model_type,
+            "ensemble_method": ensemble_method,
+            "mode": mode,
+            "feature_family_name": feature_family_name,
+            "feature_policy": feature_policy,
+            "feature_set_id": feature_set_id_value,
+            "n_predictions": int(len(group)),
+            "n_features": n_features,
+            "mae": float(mae),
+            "rmse": float(rmse),
+            "r2": r2,
+            "r2_adjusted": r2_adjusted,
+            "diracc": directional_accuracy(actual, pred),
+            "mae_naive": float(mae_naive),
+            "rmse_naive": float(rmse_naive),
+            "mae_improvement_vs_naive": float(mae_naive - mae),
+            "rmse_improvement_vs_naive": float(rmse_naive - rmse),
+            "rank": 0,
+            "metric_extras_json": "{}",
+            "avg_train_seconds": float(group["train_seconds"].mean()),
+            "total_train_seconds": float(group["train_seconds"].sum()),
+        }
+        for recipe_name, recipe in SCORE_RECIPES.items():
+            metric_row[f"selection_score_{recipe_name}"] = float(
+                recipe["mae_weight"] * mae + recipe["rmse_weight"] * rmse
+            )
+        metric_row["selection_score"] = metric_row["selection_score_balanced"]
+        rows.append(metric_row)
 
     for keys, group in predictions.groupby(group_cols):
         append_metric_row(keys, group, "overall")
@@ -1628,6 +1640,9 @@ def build_family_summary(metrics: pd.DataFrame) -> pd.DataFrame:
         metrics.groupby(["feature_family_name", "mode"], dropna=False)
         .agg(
             best_selection_score=("selection_score", "min"),
+            best_selection_score_typical=("selection_score_typical", "min"),
+            best_selection_score_balanced=("selection_score_balanced", "min"),
+            best_selection_score_large_error=("selection_score_large_error", "min"),
             best_rmse=("rmse", "min"),
             best_mae=("mae", "min"),
             best_r2=("r2", "max"),
@@ -1661,8 +1676,9 @@ def select_champion(metrics: pd.DataFrame) -> dict:
 
     champion = candidates.iloc[0].to_dict()
     champion["selection_rule"] = (
-        "Choose the simplest model within 2% of the best weighted score, "
-        "where score = 0.75 * MAE + 0.25 * RMSE."
+        "Choose the simplest model within 2% of the best balanced weighted score, "
+        "where balanced score = 0.75 * MAE + 0.25 * RMSE. The dashboard also "
+        "stores typical-error and large-error score variants for alternate rankings."
     )
     champion["best_raw_selection_score"] = float(best_score)
     champion["equivalence_threshold"] = float(threshold)
@@ -1864,7 +1880,17 @@ def build_complexity_profile(model_runs: pd.DataFrame, metrics: pd.DataFrame | N
     ).clip(lower=0, upper=100).round(3)
 
     if metrics is not None and not metrics.empty:
-        overall_cols = ["model_config_id", "mae", "rmse", "r2", "r2_adjusted", "selection_score"]
+        overall_cols = [
+            "model_config_id",
+            "mae",
+            "rmse",
+            "r2",
+            "r2_adjusted",
+            "selection_score",
+            "selection_score_typical",
+            "selection_score_balanced",
+            "selection_score_large_error",
+        ]
         overall = metrics[metrics["evaluation_scope"] == "overall"][
             [col for col in overall_cols if col in metrics.columns]
         ].copy()
@@ -1875,6 +1901,9 @@ def build_complexity_profile(model_runs: pd.DataFrame, metrics: pd.DataFrame | N
                 "r2": "overall_r2",
                 "r2_adjusted": "overall_r2_adjusted",
                 "selection_score": "overall_selection_score",
+                "selection_score_typical": "overall_selection_score_typical",
+                "selection_score_balanced": "overall_selection_score_balanced",
+                "selection_score_large_error": "overall_selection_score_large_error",
             }
         )
         profile = profile.merge(overall, on="model_config_id", how="left")
@@ -1901,6 +1930,9 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
         "r2_adjusted",
         "diracc",
         "selection_score",
+        "selection_score_typical",
+        "selection_score_balanced",
+        "selection_score_large_error",
         "mae_improvement_vs_naive",
         "rmse_improvement_vs_naive",
         "n_predictions",
@@ -1923,6 +1955,14 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
 
     if "overall_selection_score" in wide:
         wide["selection_score"] = wide["overall_selection_score"]
+    if "overall_selection_score_typical" in wide:
+        wide["selection_score_typical"] = wide["overall_selection_score_typical"]
+    if "overall_selection_score_balanced" in wide:
+        wide["selection_score_balanced"] = wide["overall_selection_score_balanced"]
+    elif "selection_score" in wide:
+        wide["selection_score_balanced"] = wide["selection_score"]
+    if "overall_selection_score_large_error" in wide:
+        wide["selection_score_large_error"] = wide["overall_selection_score_large_error"]
     if "overall_mae" in wide:
         wide["mae"] = wide["overall_mae"]
     if "overall_rmse" in wide:
@@ -1950,6 +1990,41 @@ def build_wide_leaderboard(metrics: pd.DataFrame, config_details: pd.DataFrame) 
         lambda row: safe_ratio(row.get("recent_mae"), row.get("pre_covid_mae")),
         axis=1,
     )
+    wide["rmse_shock_penalty"] = wide.apply(
+        lambda row: safe_ratio(row.get("covid_shock_rmse"), row.get("pre_covid_rmse")),
+        axis=1,
+    )
+    wide["rmse_recovery_ratio"] = wide.apply(
+        lambda row: safe_ratio(row.get("recovery_rmse"), row.get("pre_covid_rmse")),
+        axis=1,
+    )
+    wide["rmse_recent_recovery_ratio"] = wide.apply(
+        lambda row: safe_ratio(row.get("recent_rmse"), row.get("pre_covid_rmse")),
+        axis=1,
+    )
+    for recipe_name in SCORE_RECIPES:
+        prefix = f"{recipe_name}_score"
+        wide[f"{prefix}_shock_penalty"] = wide.apply(
+            lambda row, name=recipe_name: safe_ratio(
+                row.get(f"covid_shock_selection_score_{name}"),
+                row.get(f"pre_covid_selection_score_{name}"),
+            ),
+            axis=1,
+        )
+        wide[f"{prefix}_recovery_ratio"] = wide.apply(
+            lambda row, name=recipe_name: safe_ratio(
+                row.get(f"recovery_selection_score_{name}"),
+                row.get(f"pre_covid_selection_score_{name}"),
+            ),
+            axis=1,
+        )
+        wide[f"{prefix}_recent_recovery_ratio"] = wide.apply(
+            lambda row, name=recipe_name: safe_ratio(
+                row.get(f"recent_selection_score_{name}"),
+                row.get(f"pre_covid_selection_score_{name}"),
+            ),
+            axis=1,
+        )
     wide["shock_abs_increase"] = wide.get("covid_shock_mae", np.nan) - wide.get("pre_covid_mae", np.nan)
     wide = wide.sort_values("selection_score").reset_index(drop=True)
     wide["rank"] = np.arange(1, len(wide) + 1)
