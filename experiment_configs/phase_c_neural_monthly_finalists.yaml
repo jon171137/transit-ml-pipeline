@@ -1,0 +1,90 @@
+experiment_id: phase_c_neural_monthly_finalists
+description: >
+  Comparison-quality Phase C neural finalist run. Quarterly screening results
+  identified promising recurrent neighborhoods; this block reruns a narrowed
+  set with monthly rolling refits so the resulting metrics can be compared
+  fairly with the monthly Phase A and Phase B artifacts.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_monthly_finalists/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_monthly_finalists
+
+forecast:
+  target: upt
+  horizon: 3
+  # Every retained family has 33 valid 36-month training sequences by this
+  # date. This matches the Phase A/B simulation start for fair comparison.
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  min_train_rows: 30
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_monthly_finalists/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_monthly_finalists/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-monthly
+    run_name: phase_c_neural_monthly_finalists
+
+feature_families:
+  include:
+    # Compact history families that ranked well overall.
+    - history_recent
+    - history_full
+    # Foundational time family for comparison with the strongest tabular runs.
+    - history_regime_time
+    # Wider exogenous and interaction branches that remained competitive.
+    - history_regime_time_all_exog
+    - history_regime_all_exog_linear_interactions
+    - history_regime_exog_linear_interactions
+    # Income branches retained for interpretability and interaction analysis.
+    - history_regime_income_pressure
+    - history_regime_income_linear_interactions
+    # Recent-period specialist retained to test whether the pattern survives
+    # monthly refits rather than quarterly screening.
+    - history_regime_gas_service
+
+modes:
+  - raw
+  - residual
+
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw, min_family_features: 30}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw, min_family_features: 31}
+  - {feature_policy: none, representation_policy: sequence_pca_20, min_family_features: 31}
+
+models:
+  gru:
+    enabled: true
+    param_grid:
+      # Best broad-screen neighborhood.
+      - {sequence_length: 36, recurrent_hidden_sizes: [512, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.001, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      # Smaller GRU challenger retained to measure whether added capacity pays.
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+
+  lstm:
+    enabled: true
+    param_grid:
+      # Strongest broad-screen LSTM neighborhood.
+      - {sequence_length: 36, recurrent_hidden_sizes: [256, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.3, 0.0], weight_decay: 0.0001, learning_rate: 0.0003, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}
+      # Higher-capacity LSTM retained as a bounded challenger because it
+      # produced strong recent-period results in earlier focused experiments.
+      - {sequence_length: 36, recurrent_hidden_sizes: [1000, 100], dropout: 0.1, dense_head_sizes: [200, 10], dense_head_dropouts: [0.4, 0.3], weight_decay: 0.0001, learning_rate: 0.0025, batch_size: 24, max_epochs: 300, early_stopping_patience: 25, lr_patience: 8, validation_rows: 12}

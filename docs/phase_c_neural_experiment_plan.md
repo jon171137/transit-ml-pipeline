@@ -206,3 +206,71 @@ python run_neural_models.py \
   than calculating expensive explanations for every screening configuration.
 - Consider finer per-as-of checkpoints if finalist configurations become long
   enough that losing one partially completed configuration is costly.
+
+## Monthly Finalist Block
+
+The quarterly feature-family screen is exploratory evidence. Its neural curves
+must not be treated as directly comparable with the monthly Phase A and Phase B
+curves because the neural screen forecasts only once every three months.
+
+The first comparison-quality neural config is:
+
+```text
+experiment_configs/phase_c_neural_monthly_finalists.yaml
+```
+
+The quarterly screen review found:
+
+| Dimension | Promoted signal | Decision |
+| --- | --- | --- |
+| Architecture | GRU `512 -> 100` produced the strongest overall balanced score | Promote |
+| Architecture | GRU `256 -> 100` remained competitive with lower capacity | Promote as a parsimony challenger |
+| Architecture | LSTM `256 -> 100` produced the strongest broad-screen LSTM result | Promote |
+| Architecture | LSTM `1000 -> 100` produced useful recent-period evidence in focused experiments | Retain as one bounded capacity challenger |
+| Architecture | LSTM `1000 -> 100` with a `48`-month sequence did not justify a full rerun | Defer to a focused follow-up |
+| Representation | Raw sequences contained the strongest overall configurations | Promote |
+| Representation | PCA-20 produced a notable recent-period specialist | Retain behind family-width guards |
+| Representation | PCA-95 did not justify a full monthly Cartesian branch | Defer |
+| Mode | Residual forecasts dominated the strongest overall results | Retain residual and raw so the comparison remains explicit |
+
+It narrows the quarterly screen into:
+
+- monthly rolling refits from January 2011 through December 2025
+- the same April 2011 through March 2026 target window as Phase A and Phase B
+- four promoted architecture neighborhoods:
+  - GRU `512 -> 100`
+  - GRU `256 -> 100`
+  - LSTM `256 -> 100`
+  - LSTM `1000 -> 100`
+- nine feature families representing compact history, time, exogenous,
+  interaction, income, and recent-period-specialist hypotheses
+- raw and residual modes
+- raw sequences, guarded feature-policy branches, and a bounded PCA-20 branch
+- dynamic policy deduplication so equivalent rolling selectors are not fit
+  twice
+
+The planner reports `272` model configurations and `48,960` monthly rolling
+fits before runtime deduplication. A four-shard launch has an upper bound of
+approximately `12,240` fits per shard.
+
+The monthly block intentionally excludes the broad PCA-95 branch and the
+48-month LSTM branch. They did not justify a full Cartesian rerun during the
+quarterly screen. A later focused challenger can restore one of those branches
+if the monthly results reveal a specific reason to do so.
+
+The monthly run is still a deterministic candidate-comparison pass. After its
+best configurations are identified, rerun a small finalist slice across
+multiple random seeds to report neural stability without multiplying every
+screening branch.
+
+Plan the monthly block before launching it:
+
+```bash
+python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_monthly_finalists.yaml
+```
+
+The dashboard should merge monthly neural finalist artifacts into the primary
+cross-family leaderboard. The monthly neural block uses the same April 2011
+through March 2026 target window as the classical models. Keep quarterly neural
+screen artifacts separate or label them explicitly as screening-only views.

@@ -1025,3 +1025,30 @@
   - `variance_pruned` matched `none` for `history_regime_time`
   - the redundant branch was skipped and recorded in the manifest
 - Ran a two-shard contract smoke for shard `0` successfully.
+
+## Phase C Monthly Neural Finalist Preparation
+
+- Reviewed the completed quarterly Phase C feature-family screen as a
+  screening artifact rather than a direct peer for monthly Phase A and Phase B
+  curves.
+- Added `experiment_configs/phase_c_neural_monthly_finalists.yaml`.
+- Narrowed the monthly comparison block to:
+  - four GRU/LSTM architecture neighborhoods
+  - nine purposeful feature families
+  - raw and residual modes
+  - raw, guarded selector, and PCA-20 representation branches
+  - monthly rolling refits from January 2011 through December 2025
+- Verified that every retained family has `33` valid 36-month training
+  sequences by January 2011.
+- Set the neural minimum training-sequence floor to `30`, allowing the monthly
+  neural finalists to use the same April 2011 through March 2026 target window
+  as Phase A and Phase B.
+- Excluded broad PCA-95 and 48-month LSTM branches from the first monthly
+  Cartesian rerun because the quarterly screen did not justify their cost.
+- Documented that quarterly neural screens should remain separate from the
+  primary monthly leaderboard and that a small multi-seed stability pass comes
+  after monthly finalist selection.
+- Validated the monthly planner output:
+  - `272` model configurations
+  - `180` monthly as-of dates
+  - `48,960` rolling fits before runtime policy deduplication

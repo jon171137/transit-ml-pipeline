@@ -427,6 +427,23 @@ python run_neural_models.py \
 Each shard writes isolated result, chunk, and checkpoint folders so the
 completed artifact bundles can be merged after all workers finish.
 
+Quarterly neural feature-family artifacts are screening evidence, not direct
+leaderboard peers for the monthly tabular and autoregressive runs. After the
+screen, plan the narrowed monthly comparison block:
+
+```bash
+python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_monthly_finalists.yaml
+```
+
+This finalist block promotes four recurrent neighborhoods across nine
+purposeful feature families and monthly rolling refits. The planner reports
+`272` model configurations and `48,960` monthly rolling fits before runtime
+deduplication. Merge those monthly artifacts, rather than the quarterly
+screen, into the primary cross-family dashboard leaderboard. The monthly
+neural block uses the same April 2011 through March 2026 target window as the
+classical runs.
+
 The Phase B grid includes ARIMA, SARIMA, and SARIMAX configurations. SARIMAX
 uses compact service, economic, income-pressure, and service-plus-economic
 exogenous sets. Those outputs can be merged back with Phase A for a unified
