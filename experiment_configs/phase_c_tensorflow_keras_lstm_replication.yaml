@@ -1,0 +1,113 @@
+experiment_id: phase_c_tensorflow_keras_lstm_replication
+description: >
+  TensorFlow/Keras replication and focused refinement of the previously strong
+  two-layer LSTM architecture. This run keeps the same monthly synthetic
+  deployment window as the main cross-family dashboard artifacts.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_tensorflow_keras_lstm_replication/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_tensorflow_keras_lstm_replication
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  min_train_rows: 30
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_tensorflow_keras_lstm_replication/chunks
+    checkpoint_dir: experiments_output/phase_c_tensorflow_keras_lstm_replication/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-tensorflow
+    run_name: phase_c_tensorflow_keras_lstm_replication
+
+feature_families:
+  include:
+    - history_recent
+    - history_regime_time
+    - history_regime_exog_linear_interactions
+
+modes:
+  - residual
+
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw, min_family_features: 30}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw, min_family_features: 31}
+
+keras_lstm_defaults: &keras_lstm_defaults
+  activation: tanh
+  dropout: 0.1
+  recurrent_dropout: 0.1
+  dense_l2: 0.0001
+  weight_decay: 0.0001
+  batch_size: 24
+  max_epochs: 300
+  early_stopping_patience: 30
+  lr_patience: 10
+  lr_factor: 0.65
+  min_lr: 0.000001
+  validation_rows: 12
+
+models:
+  lstm:
+    enabled: true
+    param_grid:
+      # Exact-structure analogue of the prior successful Keras notebook model:
+      # LSTM(1000) -> Dropout(.4) -> LSTM(100) -> Dropout(.3)
+      # -> Dense(200) -> Dense(10) -> Dense(1).
+      - <<: *keras_lstm_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [1000, 100]
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0025
+      # Same architecture with a longer memory window.
+      - <<: *keras_lstm_defaults
+        sequence_length: 48
+        recurrent_hidden_sizes: [1000, 100]
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0025
+      # Slightly lower learning rate for the same high-capacity design.
+      - <<: *keras_lstm_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [1000, 100]
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0015
+      # Lower-capacity Keras version to check whether the large first layer is
+      # actually buying signal or only recreating the notebook setup.
+      - <<: *keras_lstm_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        inter_recurrent_dropouts: [0.35]
+        pre_head_dropout: 0.25
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0015

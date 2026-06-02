@@ -35,6 +35,7 @@ IMAGE_ASSET_DIR = Path("dashboard/assets/images")
 DEFAULT_FEATURE_FAMILIES_PATH = Path("dashboard/public_artifacts/latest/feature_families.json")
 PHASE_A_V2_CONFIG_PATH = Path("experiment_configs/large_phase_a_v2_complexity.yaml")
 PHASE_B_V2_CONFIG_PATH = Path("experiment_configs/phase_b_autoregressive_v2_complexity.yaml")
+PHASE_C_MONTHLY_CONFIG_PATH = Path("experiment_configs/phase_c_neural_monthly_finalists.yaml")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MODEL_FAMILY_ORDER = ["baseline", "linear", "autoregressive", "tree", "neural_net", "neural"]
 MODEL_BUILD_ORDER = [
@@ -699,6 +700,7 @@ def render_experiment_page(
     experiment_manifest: dict,
     phase_a_config_text: str,
     phase_b_config_text: str,
+    phase_c_config_text: str,
 ) -> None:
     st.subheader("Experiment")
     render_public_bundle_note(experiment_manifest)
@@ -786,7 +788,7 @@ def render_experiment_page(
         "These YAML files define the model grids, feature families, feature "
         "policies, rolling forecast window, parallelization settings, MLflow "
         "tracking names, checkpoint locations, and output artifact folders used "
-        "for the current combined A/B v2 dashboard bundle."
+        "for the current combined A/B/C dashboard bundle."
     )
     config_rows = [
         {
@@ -800,6 +802,12 @@ def render_experiment_page(
             "Config file": str(PHASE_B_V2_CONFIG_PATH),
             "Role": "ARIMA, SARIMA, and SARIMAX grids with compact exogenous sets.",
             "Loaded": "yes" if phase_b_config_text else "missing",
+        },
+        {
+            "Phase": "C monthly finalists",
+            "Config file": str(PHASE_C_MONTHLY_CONFIG_PATH),
+            "Role": "GPU-trained GRU and LSTM sequence models under the same monthly rolling evaluation.",
+            "Loaded": "yes" if phase_c_config_text else "missing",
         },
     ]
     st.dataframe(pd.DataFrame(config_rows), use_container_width=True, hide_index=True)
@@ -815,6 +823,12 @@ def render_experiment_page(
             st.code(phase_b_config_text, language="yaml")
     else:
         st.warning(f"Could not find `{PHASE_B_V2_CONFIG_PATH}`.")
+
+    if phase_c_config_text:
+        with st.expander("Show Phase C monthly finalists config YAML"):
+            st.code(phase_c_config_text, language="yaml")
+    else:
+        st.warning(f"Could not find `{PHASE_C_MONTHLY_CONFIG_PATH}`.")
 
     st.markdown(EXPERIMENT_OVERVIEW)
 
@@ -1735,6 +1749,7 @@ def main() -> None:
     feature_families = load_feature_family_definitions()
     phase_a_config_text = load_config_text(PHASE_A_V2_CONFIG_PATH)
     phase_b_config_text = load_config_text(PHASE_B_V2_CONFIG_PATH)
+    phase_c_config_text = load_config_text(PHASE_C_MONTHLY_CONFIG_PATH)
     overview_top_models = enrich_score_columns(
         ensure_model_taxonomy(artifacts.get("overview_top_models", leaderboard.head(5).copy()))
     )
@@ -1797,6 +1812,7 @@ def main() -> None:
             experiment_manifest,
             phase_a_config_text,
             phase_b_config_text,
+            phase_c_config_text,
         )
         return
 

@@ -1,0 +1,201 @@
+experiment_id: phase_c_neural_architecture_refinement
+description: >
+  Focused monthly GRU and LSTM architecture refinement around the strongest
+  Phase C finalist neighborhoods. This block tests nearby learning rates,
+  sequence lengths, recurrent widths, deeper recurrent stacks, richer dense
+  heads, and a close PyTorch analogue of the earlier successful Keras LSTM.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_architecture_refinement/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_architecture_refinement
+
+forecast:
+  target: upt
+  horizon: 3
+  # Keep the same monthly synthetic-deployment window as Phase A/B and the
+  # comparison-quality neural finalists.
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  min_train_rows: 30
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_architecture_refinement/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_architecture_refinement/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-refinement
+    run_name: phase_c_neural_architecture_refinement
+
+feature_families:
+  include:
+    # The leading monthly GRU and LSTM both used history_recent. The remaining
+    # families test progressively broader context and one interaction-rich set.
+    - history_recent
+    - history_full
+    - history_regime_time
+    - history_regime_exog_linear_interactions
+
+modes:
+  # The strongest monthly GRU and LSTM configurations were residual models.
+  - residual
+
+policy_representation_variants:
+  # The runner skips branches that are inapplicable or dynamically equivalent
+  # to an earlier selected-feature branch for the same family.
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw, min_family_features: 30}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw, min_family_features: 31}
+
+# Shared ceiling and scheduler settings. A high epoch ceiling provides room for
+# slower architectures while early stopping prevents every rolling fit from
+# consuming the full allowance.
+refinement_defaults: &refinement_defaults
+  dropout: 0.1
+  weight_decay: 0.0001
+  batch_size: 24
+  max_epochs: 500
+  early_stopping_patience: 40
+  lr_patience: 10
+  lr_factor: 0.65
+  min_lr: 0.000001
+  validation_rows: 12
+
+models:
+  gru:
+    enabled: true
+    param_grid:
+      # Monthly finalist winner.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.001
+      # Parsimony challenger from the finalist run.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+      # Nearby rate for the winning width.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0005
+      # Shorter and longer memory windows.
+      - <<: *refinement_defaults
+        sequence_length: 24
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.001
+      - <<: *refinement_defaults
+        sequence_length: 48
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.001
+      # Wider and deeper recurrent paths.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [768, 128]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0005
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0005
+      # Richer nonlinear head.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [256, 64, 10]
+        dense_head_dropouts: [0.3, 0.1, 0.0]
+        learning_rate: 0.001
+
+  lstm:
+    enabled: true
+    param_grid:
+      # Monthly finalist winner.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+      # Close PyTorch analogue of the earlier successful Keras experiment:
+      # LSTM 1000 -> Dropout(.4) -> LSTM 100 -> Dropout(.3) -> Dense 200 -> 10.
+      # PyTorch's standard LSTM does not expose Keras-style recurrent-state
+      # dropout, so the explicit inter-layer and pre-head drops are the closest
+      # faithful comparison supported by this runner.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [1000, 100]
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0025
+      # Nearby rate for the compact winner.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0006
+      # Shorter and longer memory windows.
+      - <<: *refinement_defaults
+        sequence_length: 24
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+      - <<: *refinement_defaults
+        sequence_length: 48
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+      # Moderate width and a deeper recurrent stack.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0005
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0005
+      # Richer nonlinear head.
+      - <<: *refinement_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [256, 64, 10]
+        dense_head_dropouts: [0.3, 0.1, 0.0]
+        learning_rate: 0.0003

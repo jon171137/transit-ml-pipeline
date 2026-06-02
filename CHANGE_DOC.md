@@ -78,6 +78,22 @@
   - `matplotlib`
   - `python-dotenv`
 - Added optional `.env` loading to local scripts using `python-dotenv`.
+
+## Neural Experiment Refinement
+
+- Added `run_tensorflow_neural_models.py` as a TensorFlow/Keras sibling runner
+  for faithful testing of recurrent dropout and Keras-style LSTM architecture
+  variants.
+- Added `experiment_configs/phase_c_tensorflow_keras_lstm_replication.yaml`
+  for a focused monthly replication/refinement of the previously strong
+  two-layer Keras LSTM.
+- Added `requirements-tensorflow.txt` for optional TensorFlow experiment
+  environments.
+- Extended the PyTorch neural runner with explicit inter-recurrent dropout,
+  pre-head dropout, and scheduler `min_lr` support.
+- Added `experiment_configs/phase_c_neural_architecture_refinement.yaml` for a
+  focused GRU/LSTM architecture refinement around the strongest Phase C
+  finalists.
 - Created `.gitignore` to exclude local secrets, virtualenv files, caches, and notebook checkpoints.
 
 ## Notebook Cleanup

@@ -2,28 +2,20 @@ PROJECT_OVERVIEW = """
 ### What This Project Is
 
 This project is a forecasting lab built around monthly transit ridership and
-service data. The central question is practical: if a forecasting system had
-been running through a major disruption like COVID, which modeling choices would
-have held up, which would have failed, and how would we know?
-
-Transit ridership is a useful case study because it combines several forecasting
-problems in one place. The series has strong seasonality, long-run trend,
-operational context, economic context, and a large structural break. That makes
-it a compact but realistic setting for studying model behavior under changing
-conditions rather than only optimizing a static train/test split.
+service data. Transit ridership is a useful case study because it combines
+several forecasting problems in one place. The series has strong seasonality,
+long-run trend, operational context, economic context, and a large structural
+break. That makes it a compact but realistic setting for studying model
+behavior under changing conditions.
 
 The project is designed as both a modeling study and a systems-design artifact.
-It asks not just which model performs best, but how the data would be refreshed,
-how features would be regenerated, how experiments would be tracked, and how a
-reviewer could inspect performance over time.
 
 ### What The System Does
 
 The pipeline ingests and normalizes several data sources, builds a monthly
 integrated feature table, creates feature families, trains forecasting models
-across repeated historical as-of dates, and publishes curated artifacts for this
-dashboard. The current dashboard bundle combines Phase A tabular models with
-Phase B autoregressive models under the same rolling H3 UPT evaluation contract.
+across repeated historical as-of dates, and publishes curated artifacts for
+this dashboard.
 
 The AWS version demonstrates a production-shaped workflow: containerized Python
 jobs, ECS tasks, Step Functions orchestration, S3 artifact storage, CloudWatch
@@ -33,7 +25,7 @@ cheaper and easier on a personal machine.
 
 That split is intentional. AWS proves the workflow can be orchestrated and
 monitored in a cloud environment. Local runs provide the freedom to scale up the
-research grid without treating every exploratory model as a cloud bill.
+research grid using my own compute resources.
 
 ### What The Experiment Simulates
 
@@ -48,31 +40,17 @@ raw-vs-residual approaches across that rolling history. The period-specific
 metrics separate ordinary pre-COVID behavior from the shock, recovery, and more
 recent operating regime.
 
-### What The Dashboard Is For
-
-This dashboard is meant to make the project inspectable. It shows model rankings,
-forecast paths, period-specific performance, feature-family comparisons, and the
-operational footprint of the pipeline. The final version should let a technical
-reviewer quickly understand the system design, the modeling strategy, and the
-tradeoffs between performance, stability, and simplicity.
-
-The intended reading path is: understand the project goal, inspect how the
-pipeline is structured, review the data and feature engineering choices, then
-use the results explorer to compare what different modeling strategies did over
-time.
-
 ### Current Scope
 
-The current artifacts come from a larger local A/B experiment. Phase A covers
+The current artifacts come from a larger local A/B/C experiment. Phase A covers
 baseline, regularized linear, bagging-style tree, randomized tree, and boosted
 tree models across income-aware feature families and model-specific feature
 policies. Phase B adds ARIMA, SARIMA, and SARIMAX configurations using compact
 service, economic, income-pressure, and service-economic exogenous sets.
 
-The dashboard now reads a combined DuckDB-derived export that includes baseline,
-linear, tree, and autoregressive model families. The next major modeling stage
-is Phase C: neural-net and sequence-style models, likely run on a GPU-capable
-machine while preserving the same artifact contract.
+Phase C adds GPU-trained GRU and LSTM sequence models. The dashboard now reads a
+combined DuckDB-derived export that includes baseline, linear, tree,
+autoregressive, and neural-net model families under one artifact contract.
 """
 
 
@@ -157,7 +135,7 @@ recent operating period.
 
 ### Current Experiment Blocks
 
-The current dashboard bundle combines two completed local experiment blocks:
+The current dashboard bundle combines three completed local experiment blocks:
 
 - Phase A: baseline, linear, and tree-based models over the monthly feature
   table. This includes seasonal naive, Ridge, Lasso, Elastic Net, random forest,
@@ -165,8 +143,11 @@ The current dashboard bundle combines two completed local experiment blocks:
 - Phase B: autoregressive models using the same rolling as-of evaluation frame.
   This includes ARIMA, SARIMA, and SARIMAX, with SARIMAX using compact service,
   economic, income-pressure, and service-economic exogenous sets.
+- Phase C: GPU-trained neural sequence finalists. This includes GRU and LSTM
+  models run monthly across the full evaluation window after broader screening
+  and capacity experiments narrowed the grid.
 
-Both phases are evaluated from the same as-of timeline and exported through the
+All three phases are evaluated from the same monthly as-of timeline and exported through the
 same artifact contract, so their forecasts can be compared in one dashboard
 without special-case logic.
 
@@ -174,10 +155,10 @@ without special-case logic.
 
 The experiment compares several layers of modeling decisions:
 
-- `model_family`: broad modeling group such as baseline, linear, tree, and
-  autoregressive. Neural-net models are reserved for a later Phase C.
+- `model_family`: broad modeling group such as baseline, linear, tree,
+  autoregressive, and neural-net.
 - `model_build`: specific implementation such as seasonal naive, Ridge, Lasso,
-  XGBoost, ARIMA, SARIMA, or SARIMAX.
+  XGBoost, ARIMA, SARIMA, SARIMAX, GRU, or LSTM.
 - `mode`: raw/direct forecasts versus residual forecasts built around a
   seasonal naive baseline.
 - `feature_family_name`: different subsets of engineered features, from compact
@@ -190,6 +171,122 @@ This structure lets the project ask more than "which model won?" It can compare
 whether simpler models are close enough, whether exogenous features help, whether
 interactions are worth the complexity, and whether residual modeling behaves
 better through structural change.
+
+### Model Family Review
+
+#### Seasonal Baseline
+
+**Basics:** A seasonal-naive model predicts from the matching month one year
+earlier. Monthly transit ridership has pronounced seasonality, so this is a
+meaningful minimum bar rather than a ceremonial baseline.
+
+**Variations:** The experiment keeps one canonical `seasonal_naive`
+configuration. It is reused as the reference forecast for error comparisons and
+for models trained in residual mode.
+
+**Parameter Search:** No hyperparameter grid is needed. The forecast uses a
+12-month seasonal lag and the shared 3-month forecast horizon.
+
+**Observations:** The baseline captures ordinary seasonal shape but struggles
+when the system shifts sharply. Its overall MAE is about 753,000 riders. That
+makes it useful for interpreting whether more complex models are earning their
+additional operational and explanatory cost.
+
+#### Regularized Linear Models
+
+**Basics:** Linear models are a strong fit for testing whether lagged ridership,
+service, time, and economic context have stable additive relationships with the
+target. Regularization matters because wider feature families contain correlated
+lags, rolling summaries, and interaction terms.
+
+**Variations:** Phase A evaluates Ridge, Lasso, and Elastic Net in raw and
+residual modes. It also varies input treatment across no pruning,
+variance pruning, correlation pruning, mutual-information selection, and
+Lasso-based selection where applicable.
+
+**Parameter Search:** Ridge searches `alpha` values from `0.1` to `100`. Lasso
+searches `alpha` values from `1` to `1000`. Elastic Net searches `alpha` values
+from `0.1` to `10` and `l1_ratio` values of `0.25` and `0.50`.
+
+**Observations:** Elastic Net leads the linear family with an overall MAE near
+422,000 and RMSE near 888,000. Ridge is close behind. The result is useful:
+regularized linear models remain competitive and comparatively legible even
+after the experiment expands into larger ensemble grids.
+
+#### Autoregressive Models
+
+**Basics:** Autoregressive models explicitly represent time-series structure.
+They are natural comparators for monthly forecasting because they model lagged
+dependence and, for seasonal variants, recurring annual patterns directly.
+
+**Variations:** Phase B evaluates ARIMA, SARIMA, and SARIMAX. SARIMA adds
+12-month seasonal terms. SARIMAX adds compact exogenous sets for service,
+economic lagged context, income pressure, and combined service-economic
+signals.
+
+**Parameter Search:** ARIMA evaluates 12 `(p, d, q)` orders with trend options
+`n` and `c`. SARIMA evaluates 6 nonseasonal orders against 4 seasonal orders
+with period `12`. SARIMAX evaluates 5 nonseasonal orders, 3 seasonal orders with
+period `12`, and 4 compact exogenous sets.
+
+**Observations:** SARIMAX is the strongest autoregressive build with overall MAE
+near 450,000 and RMSE near 1.07 million. It does not lead the full leaderboard,
+but it adds an important structural comparison and produces AIC/BIC diagnostics
+that help discuss fit-versus-complexity tradeoffs.
+
+#### Tree Ensembles
+
+**Basics:** Tree ensembles can learn nonlinear effects and interactions without
+requiring each relationship to be manually specified. That is useful in a
+ridership series where service, seasonality, economic pressure, and regime
+changes may not combine additively.
+
+**Variations:** Phase A evaluates random forest, Extra Trees, and XGBoost across
+raw and residual modes, engineered feature families, and tree-appropriate
+policies including variance pruning, mutual-information selection, and
+tree-importance top-30 selection.
+
+**Parameter Search:** Random forest and Extra Trees vary tree count from `300`
+to `500`, depth from `4` or `6` through unrestricted growth, minimum leaf size
+from `3` to `5`, and feature sampling between `sqrt` and `0.7`. XGBoost explores
+tree counts from `100` to `500`, depths from `2` to `4`, learning rates from
+`0.02` to `0.10`, subsampling from `0.8` to `0.9`, column sampling from `0.7`
+to `0.8`, and minimum child weights from `1` to `5`.
+
+**Observations:** XGBoost produces the strongest overall results in the current
+bundle. Leading tree configurations land around 300,000 to 305,000 MAE, 525,000
+to 541,000 RMSE, and R-squared near `0.92`, depending on the ranking recipe and
+parsimony tie-break. Random forest and Extra Trees also perform well, showing
+that nonlinear ensemble structure contributes beyond a single boosted
+implementation.
+
+#### Neural Sequence Models
+
+**Basics:** Recurrent neural networks are designed to learn patterns from
+ordered sequences. For this project, the interesting question is whether
+sequence models can recover useful temporal representations across a major
+structural break, not whether additional network capacity automatically wins.
+
+**Variations:** Earlier Phase C screening compared MLP, simple RNN, GRU, and
+LSTM models. Capacity experiments then focused the monthly finalist run on GRU
+and LSTM. The finalist bundle compares raw and residual modes, compact and wider
+feature families, dynamic feature policies, raw sequence representations, and
+selected PCA sequence representations.
+
+**Parameter Search:** The monthly finalists use sequence lengths of `36`
+months, batch size `24`, up to `300` epochs, early-stopping patience `25`, and
+learning-rate reduction patience `8`. GRU variants compare recurrent layer
+sizes `[512, 100]` and `[256, 100]` with learning rates `0.001` and `0.0003`.
+LSTM variants compare `[256, 100]` and a larger `[1000, 100]` network with
+learning rates `0.0003` and `0.0025`. Dense heads use `[200, 10]`, with dropout
+and weight decay varied through the finalist definitions.
+
+**Observations:** The strongest neural finalist is a residual GRU using a
+compact recent-history family, with overall MAE near 587,000. LSTM is close
+behind. Neural models do not displace the best tree or regularized linear
+models in the full-window leaderboard, but the result is still informative:
+larger sequence models are not automatically better, and residual modeling plus
+compact histories deserves closer inspection in the recent regime.
 
 ### Leaderboard
 
@@ -234,21 +331,22 @@ on average while still being fragile at the moment when robustness matters most.
 
 The current run is large enough to support real comparison across model family,
 model build, feature family, feature policy, raw/residual mode, and
-period-specific shock/recovery behavior. It is still not the final research
-universe: neural-net models, deeper local sweeps, and any future target variants
-can be added later without changing the dashboard contract.
+period-specific shock/recovery behavior. Additional local refinements and any
+future target variants can be added without changing the dashboard contract.
 
-The early pattern is already useful. Strong tree models lead the combined
-leaderboard under the current selection rule, while SARIMAX provides a useful
-autoregressive comparison point with explicit time-series structure and AIC/BIC
-diagnostics stored in the raw run artifacts and complexity profile.
+The current pattern is already useful. Strong boosted-tree models lead the
+combined leaderboard under the current selection rule. Regularized linear
+models remain surprisingly competitive and interpretable. SARIMAX provides a
+useful time-series comparison point with explicit structure and AIC/BIC
+diagnostics. Neural finalists add a GPU-trained sequence-model comparison under
+the same monthly historical evaluation frame.
 
 ### Broader Experiment Scope
 
-The larger local run will continue expanding breadth and depth while preserving
-the same output contract. Planned directions include revisiting Phase A feature
-policies if needed, adding Phase C neural-net time-series models, and moving GPU
-work to a desktop/Linux environment for sequence models.
+The larger local research path can continue expanding breadth and depth while
+preserving the same output contract. Useful follow-up directions include
+targeted Phase A refinements, narrower neural follow-ups around the most
+promising residual sequence models, and additional target variants.
 
 The key requirement for the broader run is checkpointed, queryable experiment
 storage. DuckDB now sits between raw experiment artifacts and the dashboard,

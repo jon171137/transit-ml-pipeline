@@ -1,8 +1,8 @@
-"""Run Phase C PyTorch sequence-model transit forecasting experiments.
+"""Run Phase C TensorFlow/Keras sequence-model transit experiments.
 
-The Phase C runner keeps the same rolling historical simulation and portable
-artifact contract as the tabular and autoregressive runners. Each as-of month
-fits only on sequence samples whose feature rows occur before that month.
+This sibling runner exists to test Keras-native recurrent behavior, especially
+`recurrent_dropout`, while keeping the same rolling historical simulation and
+artifact contract as the PyTorch neural runner.
 """
 
 from __future__ import annotations
@@ -18,11 +18,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+
+try:
+    import tensorflow as tf
+except ImportError:  # pragma: no cover - handled at runtime for optional dependency
+    tf = None
 
 try:
     import yaml
@@ -47,8 +49,8 @@ from run_aws_streamlined_models import (
     is_shock_period,
     join_uri,
     log_to_mlflow,
-    read_json_uri,
     read_chunk_result,
+    read_json_uri,
     read_parquet_uri,
     resolve_output_base_uri,
     safe_ape,
@@ -64,9 +66,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "jolese-transit-ml-portfolio-367995857052-us-east-1-an")
-MODEL_RESULTS_PREFIX = os.environ.get("MODEL_RESULTS_PREFIX", "model_results/neural")
-DASHBOARD_OUTPUT_PREFIX = os.environ.get("DASHBOARD_OUTPUT_PREFIX", "dashboard/neural")
-NEURAL_RUNNER_CONTRACT_VERSION = "v5_capacity_architectures"
+MODEL_RESULTS_PREFIX = os.environ.get("MODEL_RESULTS_PREFIX", "model_results/neural_tensorflow")
+DASHBOARD_OUTPUT_PREFIX = os.environ.get("DASHBOARD_OUTPUT_PREFIX", "dashboard/neural_tensorflow")
+TENSORFLOW_RUNNER_CONTRACT_VERSION = "v1_keras_sequence"
 
 FEATURE_IMPORTANCE_COLUMNS = [
     "experiment_id",
@@ -92,14 +94,17 @@ FEATURE_IMPORTANCE_COLUMNS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run PyTorch Phase C neural experiments.")
+    parser = argparse.ArgumentParser(description="Run TensorFlow/Keras Phase C neural experiments.")
     parser.add_argument("--experiment-config", required=True, help="YAML experiment config path.")
     parser.add_argument("--bucket", default=BUCKET_NAME)
     parser.add_argument("--results-prefix", default=MODEL_RESULTS_PREFIX)
     parser.add_argument("--dashboard-prefix", default=DASHBOARD_OUTPUT_PREFIX)
     parser.add_argument("--enable-mlflow", action="store_true", default=False)
     parser.add_argument("--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI"))
-    parser.add_argument("--mlflow-experiment-name", default=os.environ.get("MLFLOW_EXPERIMENT_NAME", "transit-forecasting-phase-c"))
+    parser.add_argument(
+        "--mlflow-experiment-name",
+        default=os.environ.get("MLFLOW_EXPERIMENT_NAME", "transit-forecasting-phase-c-tensorflow"),
+    )
     parser.add_argument("--mlflow-run-name", default=os.environ.get("MLFLOW_RUN_NAME"))
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("EXPERIMENT_SHARD_INDEX", "0")))
     parser.add_argument("--shard-count", type=int, default=int(os.environ.get("EXPERIMENT_SHARD_COUNT", "1")))
@@ -115,100 +120,36 @@ def read_yaml_config(path: str) -> dict:
 def set_seed(seed: int, deterministic: bool = True) -> None:
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    if tf is not None:
+        tf.keras.utils.set_random_seed(seed)
+        if deterministic:
+            try:
+                tf.config.experimental.enable_op_determinism()
+            except Exception:
+                logger.debug("TensorFlow op determinism was not available.", exc_info=True)
 
 
-def resolve_device(requested: str) -> torch.device:
-    if requested == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if requested == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false.")
-    return torch.device(requested)
-
-
-class SequenceRegressor(nn.Module):
-    def __init__(self, model_type: str, n_features: int, params: dict):
-        super().__init__()
-        self.model_type = model_type
-        hidden_size = int(params.get("hidden_size", 32))
-        num_layers = int(params.get("num_layers", 1))
-        encoder_dropout = float(params.get("dropout", 0.0))
-        if model_type == "mlp":
-            sequence_length = int(params["sequence_length"])
-            self.encoder = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(sequence_length * n_features, hidden_size),
-                nn.ReLU(),
-                nn.Dropout(encoder_dropout),
-            )
-            encoded_size = hidden_size
-        else:
-            recurrent_cls = {"rnn": nn.RNN, "gru": nn.GRU, "lstm": nn.LSTM}[model_type]
-            recurrent_hidden_sizes = params.get("recurrent_hidden_sizes") or [hidden_size] * num_layers
-            recurrent_hidden_sizes = [int(value) for value in recurrent_hidden_sizes]
-            inter_recurrent_dropouts = params.get("inter_recurrent_dropouts")
-            if inter_recurrent_dropouts is None:
-                inter_recurrent_dropouts = [encoder_dropout] * max(0, len(recurrent_hidden_sizes) - 1)
-            elif not isinstance(inter_recurrent_dropouts, list):
-                inter_recurrent_dropouts = [inter_recurrent_dropouts] * max(0, len(recurrent_hidden_sizes) - 1)
-            inter_recurrent_dropouts = [float(value) for value in inter_recurrent_dropouts]
-            self.encoder = nn.ModuleList()
-            self.recurrent_dropouts = nn.ModuleList()
-            input_size = n_features
-            for layer_index, layer_hidden_size in enumerate(recurrent_hidden_sizes):
-                self.encoder.append(
-                    recurrent_cls(
-                        input_size=input_size,
-                        hidden_size=layer_hidden_size,
-                        num_layers=1,
-                        batch_first=True,
-                    )
-                )
-                if layer_index < len(recurrent_hidden_sizes) - 1:
-                    layer_dropout = (
-                        inter_recurrent_dropouts[layer_index]
-                        if layer_index < len(inter_recurrent_dropouts)
-                        else encoder_dropout
-                    )
-                    self.recurrent_dropouts.append(nn.Dropout(layer_dropout))
-                input_size = layer_hidden_size
-            encoded_size = recurrent_hidden_sizes[-1]
-        dense_head_sizes = [int(value) for value in params.get("dense_head_sizes", [])]
-        dense_head_dropouts = params.get("dense_head_dropouts", [])
-        if not isinstance(dense_head_dropouts, list):
-            dense_head_dropouts = [dense_head_dropouts] * len(dense_head_sizes)
-        dense_head_dropouts = [
-            float(dense_head_dropouts[index]) if index < len(dense_head_dropouts) else 0.0
-            for index in range(len(dense_head_sizes))
-        ]
-        head_layers = []
-        pre_head_dropout = float(params.get("pre_head_dropout", 0.0))
-        if pre_head_dropout:
-            head_layers.append(nn.Dropout(pre_head_dropout))
-        for dense_size, dense_dropout in zip(dense_head_sizes, dense_head_dropouts):
-            head_layers.extend([nn.Linear(encoded_size, dense_size), nn.ReLU()])
-            if dense_dropout:
-                head_layers.append(nn.Dropout(dense_dropout))
-            encoded_size = dense_size
-        head_layers.append(nn.Linear(encoded_size, 1))
-        self.head = nn.Sequential(*head_layers)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        if self.model_type == "mlp":
-            encoded = self.encoder(inputs)
-        else:
-            encoded = inputs
-            for layer_index, recurrent_layer in enumerate(self.encoder):
-                encoded, _ = recurrent_layer(encoded)
-                if layer_index < len(self.recurrent_dropouts):
-                    encoded = self.recurrent_dropouts[layer_index](encoded)
-            encoded = encoded[:, -1, :]
-        return self.head(encoded).squeeze(-1)
+def configure_tensorflow_device(requested: str) -> tuple[str, str, str]:
+    if tf is None:
+        raise ImportError("TensorFlow is required. Install requirements-tensorflow.txt or tensorflow manually.")
+    requested = requested.lower()
+    gpus = tf.config.list_physical_devices("GPU")
+    if requested in {"cuda", "gpu"} and not gpus:
+        raise RuntimeError("GPU/CUDA was requested but TensorFlow does not see a GPU.")
+    if requested == "cpu":
+        try:
+            tf.config.set_visible_devices([], "GPU")
+        except RuntimeError:
+            logger.warning("TensorFlow devices were already initialized; CPU-only visibility could not be forced.")
+        return "cpu", "", ""
+    if gpus:
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError:
+                pass
+        return "gpu", gpus[0].name, ""
+    return "cpu", "", ""
 
 
 def sequence_samples(
@@ -265,126 +206,6 @@ def build_representation_transformer(policy: str, scaled_fit_rows: np.ndarray) -
     return transformer
 
 
-def fit_model(
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    model_type: str,
-    params: dict,
-    device: torch.device,
-    representation_policy: str,
-) -> tuple[SequenceRegressor, StandardScaler, PCA | None, StandardScaler, dict]:
-    validation_rows = max(1, min(int(params.get("validation_rows", 6)), len(x_train) // 4))
-    if len(x_train) <= validation_rows:
-        raise ValueError("Not enough sequence samples to create a time-ordered validation window.")
-    x_fit, x_val = x_train[:-validation_rows], x_train[-validation_rows:]
-    y_fit, y_val = y_train[:-validation_rows], y_train[-validation_rows:]
-
-    scaler = StandardScaler()
-    scaler.fit(x_fit.reshape(-1, x_fit.shape[-1]))
-    target_scaler = StandardScaler()
-    target_scaler.fit(y_fit.reshape(-1, 1))
-
-    representation_transformer = build_representation_transformer(
-        representation_policy,
-        scaler.transform(x_fit.reshape(-1, x_fit.shape[-1])),
-    )
-
-    def represented(values: np.ndarray) -> np.ndarray:
-        shape = values.shape
-        rows = scaler.transform(values.reshape(-1, shape[-1]))
-        if representation_transformer is not None:
-            rows = representation_transformer.transform(rows)
-        return rows.reshape(shape[0], shape[1], -1).astype(np.float32)
-
-    represented_fit = represented(x_fit)
-    x_fit_tensor = torch.tensor(represented_fit)
-    y_fit_tensor = torch.tensor(target_scaler.transform(y_fit.reshape(-1, 1)).ravel(), dtype=torch.float32)
-    x_val_tensor = torch.tensor(represented(x_val), device=device)
-    y_val_tensor = torch.tensor(
-        target_scaler.transform(y_val.reshape(-1, 1)).ravel(),
-        dtype=torch.float32,
-        device=device,
-    )
-    loader = DataLoader(
-        TensorDataset(x_fit_tensor, y_fit_tensor),
-        batch_size=int(params.get("batch_size", 16)),
-        shuffle=False,
-    )
-
-    model = SequenceRegressor(model_type, represented_fit.shape[-1], params).to(device)
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=float(params.get("learning_rate", 1e-3)),
-        weight_decay=float(params.get("weight_decay", 0.0)),
-    )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=float(params.get("lr_factor", 0.5)),
-        patience=int(params.get("lr_patience", 2)),
-        min_lr=float(params.get("min_lr", 0.0)),
-    )
-    loss_fn = nn.MSELoss()
-    max_epochs = int(params.get("max_epochs", 30))
-    early_stopping_patience = int(params.get("early_stopping_patience", 5))
-    best_loss = float("inf")
-    best_epoch = 0
-    best_state = None
-    stale_epochs = 0
-
-    for epoch in range(1, max_epochs + 1):
-        model.train()
-        for batch_x, batch_y in loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.to(device)
-            optimizer.zero_grad()
-            loss = loss_fn(model(batch_x), batch_y)
-            loss.backward()
-            optimizer.step()
-        model.eval()
-        with torch.no_grad():
-            validation_loss = float(loss_fn(model(x_val_tensor), y_val_tensor).item())
-        scheduler.step(validation_loss)
-        if validation_loss < best_loss:
-            best_loss = validation_loss
-            best_epoch = epoch
-            best_state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
-            stale_epochs = 0
-        else:
-            stale_epochs += 1
-        if stale_epochs >= early_stopping_patience:
-            break
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-    return model, scaler, representation_transformer, target_scaler, {
-        "epochs_trained": epoch,
-        "best_epoch": best_epoch,
-        "validation_loss": best_loss,
-        "early_stopping_used": epoch < max_epochs,
-        "n_representation_features": int(represented_fit.shape[-1]),
-    }
-
-
-def predict(
-    model: SequenceRegressor,
-    scaler: StandardScaler,
-    representation_transformer: PCA | None,
-    target_scaler: StandardScaler,
-    sequence: np.ndarray,
-    device: torch.device,
-) -> float:
-    shape = sequence.shape
-    represented = scaler.transform(sequence.reshape(-1, shape[-1]))
-    if representation_transformer is not None:
-        represented = representation_transformer.transform(represented)
-    tensor = torch.tensor(represented[None, :, :].astype(np.float32), device=device)
-    model.eval()
-    with torch.no_grad():
-        scaled_prediction = float(model(tensor).item())
-    return float(target_scaler.inverse_transform([[scaled_prediction]])[0, 0])
-
-
 def model_configs_from_config(config: dict) -> list[dict]:
     rows = []
     for model_type, details in (config.get("models") or {}).items():
@@ -413,10 +234,7 @@ def policy_representation_variants_from_config(config: dict) -> list[dict]:
     feature_policies = config.get("feature_policies") or ["none"]
     representation_policies = config.get("representation_policies") or ["sequence_raw"]
     return [
-        {
-            "feature_policy": feature_policy,
-            "representation_policy": representation_policy,
-        }
+        {"feature_policy": feature_policy, "representation_policy": representation_policy}
         for feature_policy in feature_policies
         for representation_policy in representation_policies
     ]
@@ -451,6 +269,184 @@ def rolling_policy_signature(
     return tuple(signatures)
 
 
+def namespace_for_mlflow(args: argparse.Namespace, config: dict) -> argparse.Namespace:
+    tracking = (config.get("tracking") or {}).get("mlflow") or {}
+    args.enable_mlflow = bool(tracking.get("enabled", args.enable_mlflow))
+    args.mlflow_tracking_uri = tracking.get("tracking_uri", args.mlflow_tracking_uri)
+    args.mlflow_experiment_name = tracking.get("experiment_name", args.mlflow_experiment_name)
+    args.mlflow_run_name = tracking.get("run_name", args.mlflow_run_name)
+    return args
+
+
+def neural_task_id(
+    feature_family_name: str,
+    mode: str,
+    model_config: dict,
+    feature_policy: str,
+    representation_policy: str,
+) -> str:
+    params = dict(model_config["params"])
+    params["sequence_length"] = int(params.get("sequence_length", 12))
+    params["runner_contract_version"] = TENSORFLOW_RUNNER_CONTRACT_VERSION
+    params["representation_policy"] = representation_policy
+    return config_id(model_config["model_type"], mode, feature_family_name, params, feature_policy)
+
+
+def shard_uri(uri: str | None, shard_index: int, shard_count: int) -> str | None:
+    if not uri or shard_count <= 1:
+        return uri
+    return join_uri(uri, f"shard_{shard_index:03d}_of_{shard_count:03d}")
+
+
+def build_keras_model(model_type: str, n_features: int, params: dict):
+    if tf is None:
+        raise ImportError("TensorFlow is required for build_keras_model.")
+    sequence_length = int(params["sequence_length"])
+    recurrent_hidden_sizes = [int(value) for value in params.get("recurrent_hidden_sizes", [100])]
+    recurrent_dropout = float(params.get("recurrent_dropout", 0.0))
+    layer_dropout = float(params.get("dropout", 0.0))
+    inter_recurrent_dropouts = params.get("inter_recurrent_dropouts")
+    if inter_recurrent_dropouts is None:
+        inter_recurrent_dropouts = []
+    elif not isinstance(inter_recurrent_dropouts, list):
+        inter_recurrent_dropouts = [inter_recurrent_dropouts]
+    dense_head_sizes = [int(value) for value in params.get("dense_head_sizes", [])]
+    dense_head_dropouts = params.get("dense_head_dropouts", [])
+    if not isinstance(dense_head_dropouts, list):
+        dense_head_dropouts = [dense_head_dropouts] * len(dense_head_sizes)
+    dense_l2 = float(params.get("dense_l2", params.get("weight_decay", 0.0)))
+
+    recurrent_cls = {"rnn": tf.keras.layers.SimpleRNN, "gru": tf.keras.layers.GRU, "lstm": tf.keras.layers.LSTM}[
+        model_type
+    ]
+    model = tf.keras.Sequential()
+    for layer_index, hidden_size in enumerate(recurrent_hidden_sizes):
+        recurrent_kwargs = {
+            "activation": params.get("activation", "tanh"),
+            "dropout": layer_dropout,
+            "recurrent_dropout": recurrent_dropout,
+            "return_sequences": layer_index < len(recurrent_hidden_sizes) - 1,
+        }
+        if layer_index == 0:
+            recurrent_kwargs["input_shape"] = (sequence_length, n_features)
+        model.add(
+            recurrent_cls(
+                hidden_size,
+                **recurrent_kwargs,
+            )
+        )
+        if layer_index < len(recurrent_hidden_sizes) - 1:
+            drop = float(inter_recurrent_dropouts[layer_index]) if layer_index < len(inter_recurrent_dropouts) else 0.0
+            if drop:
+                model.add(tf.keras.layers.Dropout(drop))
+    pre_head_dropout = float(params.get("pre_head_dropout", 0.0))
+    if pre_head_dropout:
+        model.add(tf.keras.layers.Dropout(pre_head_dropout))
+    regularizer = tf.keras.regularizers.l2(dense_l2) if dense_l2 else None
+    for index, dense_size in enumerate(dense_head_sizes):
+        model.add(tf.keras.layers.Dense(dense_size, activation="relu", kernel_regularizer=regularizer))
+        dense_dropout = float(dense_head_dropouts[index]) if index < len(dense_head_dropouts) else 0.0
+        if dense_dropout:
+            model.add(tf.keras.layers.Dropout(dense_dropout))
+    model.add(tf.keras.layers.Dense(1))
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=float(params.get("learning_rate", 1e-3))),
+        loss="mse",
+        metrics=["mae"],
+    )
+    return model
+
+
+def fit_model(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    model_type: str,
+    params: dict,
+    representation_policy: str,
+) -> tuple[object, StandardScaler, PCA | None, StandardScaler, dict]:
+    validation_rows = int(params.get("validation_rows", 12))
+    if len(x_train) <= validation_rows + 1:
+        raise ValueError("Not enough sequence samples for the configured validation holdout.")
+    x_fit, x_val = x_train[:-validation_rows], x_train[-validation_rows:]
+    y_fit, y_val = y_train[:-validation_rows], y_train[-validation_rows:]
+    scaler = StandardScaler()
+    flat_fit = x_fit.reshape(-1, x_fit.shape[-1])
+    scaler.fit(flat_fit)
+    scaled_fit = scaler.transform(flat_fit).reshape(x_fit.shape)
+    scaled_val = scaler.transform(x_val.reshape(-1, x_val.shape[-1])).reshape(x_val.shape)
+
+    representation_transformer = build_representation_transformer(
+        representation_policy,
+        scaled_fit.reshape(-1, scaled_fit.shape[-1]),
+    )
+
+    def represented(values: np.ndarray) -> np.ndarray:
+        shape = values.shape
+        flat = values.reshape(-1, shape[-1])
+        if representation_transformer is not None:
+            flat = representation_transformer.transform(flat)
+        return flat.reshape(shape[0], shape[1], -1).astype(np.float32)
+
+    represented_fit = represented(scaled_fit)
+    represented_val = represented(scaled_val)
+    target_scaler = StandardScaler()
+    y_fit_scaled = target_scaler.fit_transform(y_fit.reshape(-1, 1)).ravel()
+    y_val_scaled = target_scaler.transform(y_val.reshape(-1, 1)).ravel()
+
+    tf.keras.backend.clear_session()
+    model = build_keras_model(model_type, represented_fit.shape[-1], params)
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=int(params.get("early_stopping_patience", 10)),
+            restore_best_weights=True,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=float(params.get("lr_factor", 0.5)),
+            patience=int(params.get("lr_patience", 2)),
+            min_lr=float(params.get("min_lr", 0.0)),
+            verbose=0,
+        ),
+    ]
+    history = model.fit(
+        represented_fit,
+        y_fit_scaled,
+        validation_data=(represented_val, y_val_scaled),
+        epochs=int(params.get("max_epochs", 30)),
+        batch_size=int(params.get("batch_size", 16)),
+        callbacks=callbacks,
+        verbose=int(params.get("verbose", 0)),
+        shuffle=False,
+    )
+    val_losses = history.history.get("val_loss", [])
+    best_epoch = int(np.argmin(val_losses) + 1) if val_losses else len(history.epoch)
+    best_loss = float(np.min(val_losses)) if val_losses else np.nan
+    return model, scaler, representation_transformer, target_scaler, {
+        "epochs_trained": int(len(history.epoch)),
+        "best_epoch": best_epoch,
+        "validation_loss": best_loss,
+        "early_stopping_used": len(history.epoch) < int(params.get("max_epochs", 30)),
+        "n_representation_features": int(represented_fit.shape[-1]),
+    }
+
+
+def predict(
+    model,
+    scaler: StandardScaler,
+    representation_transformer: PCA | None,
+    target_scaler: StandardScaler,
+    sequence: np.ndarray,
+) -> float:
+    shape = sequence.shape
+    represented = scaler.transform(sequence.reshape(-1, shape[-1]))
+    if representation_transformer is not None:
+        represented = representation_transformer.transform(represented)
+    tensor = represented.reshape(1, shape[0], -1).astype(np.float32)
+    scaled_prediction = float(model.predict(tensor, verbose=0)[0, 0])
+    return float(target_scaler.inverse_transform([[scaled_prediction]])[0, 0])
+
+
 def run_config(
     full_table: pd.DataFrame,
     evaluation_frame: pd.DataFrame,
@@ -464,11 +460,11 @@ def run_config(
     target: str,
     horizon: int,
     min_train_rows: int,
-    device: torch.device,
     seed: int,
     deterministic: bool,
     feature_policy: str,
     representation_policy: str,
+    runtime_context: dict,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     model_type = config["model_type"]
     params = dict(config["params"])
@@ -514,12 +510,11 @@ def run_config(
             y_train,
             model_type,
             params,
-            device,
             representation_policy,
         )
         train_seconds = time.perf_counter() - started
         predict_started = time.perf_counter()
-        prediction = predict(model, scaler, representation_transformer, target_scaler, sequence, device)
+        prediction = predict(model, scaler, representation_transformer, target_scaler, sequence)
         predict_seconds = time.perf_counter() - predict_started
 
         naive = float(eval_row["seasonal_naive_proxy"])
@@ -598,12 +593,12 @@ def run_config(
                 "early_stopping_used": fit_metadata["early_stopping_used"],
                 "epochs_trained": fit_metadata["epochs_trained"],
                 "best_epoch": fit_metadata["best_epoch"],
-                "framework": "pytorch",
-                "framework_version": torch.__version__,
-                "hardware_type": "gpu" if device.type == "cuda" else "cpu",
-                "device": str(device),
-                "gpu_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
-                "cuda_version": torch.version.cuda or "",
+                "framework": "tensorflow",
+                "framework_version": tf.__version__,
+                "hardware_type": runtime_context["hardware_type"],
+                "device": runtime_context["device"],
+                "gpu_name": runtime_context["gpu_name"],
+                "cuda_version": "",
                 "refit_frequency_months": 1,
                 "model_refit": True,
                 "train_seconds": train_seconds,
@@ -613,6 +608,7 @@ def run_config(
                 "metric_extras_json": json.dumps({"validation_loss": fit_metadata["validation_loss"]}),
             }
         )
+        tf.keras.backend.clear_session()
 
     return (
         pd.DataFrame(predictions),
@@ -620,35 +616,6 @@ def run_config(
         pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS),
         pd.DataFrame(feature_sets),
     )
-
-
-def namespace_for_mlflow(args: argparse.Namespace, config: dict) -> argparse.Namespace:
-    tracking = (config.get("tracking") or {}).get("mlflow") or {}
-    args.enable_mlflow = bool(tracking.get("enabled", args.enable_mlflow))
-    args.mlflow_tracking_uri = tracking.get("tracking_uri", args.mlflow_tracking_uri)
-    args.mlflow_experiment_name = tracking.get("experiment_name", args.mlflow_experiment_name)
-    args.mlflow_run_name = tracking.get("run_name", args.mlflow_run_name)
-    return args
-
-
-def neural_task_id(
-    feature_family_name: str,
-    mode: str,
-    model_config: dict,
-    feature_policy: str,
-    representation_policy: str,
-) -> str:
-    params = dict(model_config["params"])
-    params["sequence_length"] = int(params.get("sequence_length", 12))
-    params["runner_contract_version"] = NEURAL_RUNNER_CONTRACT_VERSION
-    params["representation_policy"] = representation_policy
-    return config_id(model_config["model_type"], mode, feature_family_name, params, feature_policy)
-
-
-def shard_uri(uri: str | None, shard_index: int, shard_count: int) -> str | None:
-    if not uri or shard_count <= 1:
-        return uri
-    return join_uri(uri, f"shard_{shard_index:03d}_of_{shard_count:03d}")
 
 
 def main() -> int:
@@ -659,6 +626,13 @@ def main() -> int:
     outputs = config.get("outputs") or {}
     forecast = config.get("forecast") or {}
     execution = config.get("execution") or {}
+
+    device_label, gpu_name, cuda_version = configure_tensorflow_device(str(execution.get("device", "auto")))
+    seed = int(execution.get("random_seed", 42))
+    deterministic = bool(execution.get("deterministic", True))
+    set_seed(seed, deterministic=deterministic)
+    if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
+        raise ValueError("--shard-index must be between 0 and --shard-count - 1.")
 
     feature_table_uri = inputs["feature_table_uri"]
     feature_families_uri = inputs["feature_families_uri"]
@@ -680,12 +654,7 @@ def main() -> int:
     experiment_id = config.get("experiment_id") or current_model_run_id(str(Path(feature_table_uri).parent))
     results_base_uri = resolve_output_base_uri(outputs.get("results_base_uri"), args.bucket, args.results_prefix, experiment_id)
     dashboard_base_uri = resolve_output_base_uri(outputs.get("dashboard_base_uri"), args.bucket, args.dashboard_prefix, experiment_id)
-    device = resolve_device(str(execution.get("device", "auto")))
-    seed = int(execution.get("random_seed", 42))
-    deterministic = bool(execution.get("deterministic", True))
     checkpointing = execution.get("checkpointing") or {}
-    if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
-        raise ValueError("--shard-index must be between 0 and --shard-count - 1.")
     results_base_uri = shard_uri(results_base_uri, args.shard_index, args.shard_count)
     dashboard_base_uri = shard_uri(dashboard_base_uri, args.shard_index, args.shard_count)
     chunk_dir = shard_uri(checkpointing.get("chunk_dir"), args.shard_index, args.shard_count)
@@ -696,10 +665,16 @@ def main() -> int:
     modes = config.get("modes") or ["raw"]
     policy_representation_variants = policy_representation_variants_from_config(config)
     dynamic_policy_dedup = bool(execution.get("dynamic_policy_dedup", False))
+    runtime_context = {
+        "hardware_type": "gpu" if device_label == "gpu" else "cpu",
+        "device": device_label,
+        "gpu_name": gpu_name,
+        "cuda_version": cuda_version,
+    }
 
-    logger.info("Using device: %s", device)
+    logger.info("Using TensorFlow device: %s", device_label)
     logger.info("Feature table: %s rows, %s columns", len(feature_table), len(feature_table.columns))
-    logger.info("Neural configs: %s", len(configs))
+    logger.info("TensorFlow neural configs: %s", len(configs))
     logger.info("Policy/representation variants: %s", policy_representation_variants)
     logger.info("Dynamic policy deduplication: %s", dynamic_policy_dedup)
     logger.info("Shard: %s of %s", args.shard_index, args.shard_count)
@@ -813,11 +788,11 @@ def main() -> int:
                             target,
                             horizon,
                             int(forecast.get("min_train_rows", 24)),
-                            device,
                             seed,
                             deterministic,
                             feature_policy,
                             representation_policy,
+                            runtime_context,
                         )
                         if chunk[0].empty or chunk[1].empty:
                             raise ValueError("Configuration produced no prediction or model-run rows.")
@@ -862,9 +837,11 @@ def main() -> int:
         if feature_importance_chunks
         else pd.DataFrame(columns=FEATURE_IMPORTANCE_COLUMNS)
     )
-    feature_sets = pd.concat([chunk[3] for chunk in chunks if not chunk[3].empty], ignore_index=True).drop_duplicates("feature_set_id")
+    feature_sets = pd.concat([chunk[3] for chunk in chunks if not chunk[3].empty], ignore_index=True).drop_duplicates(
+        "feature_set_id"
+    )
     if predictions.empty:
-        raise ValueError("No neural predictions were produced.")
+        raise ValueError("No TensorFlow neural predictions were produced.")
 
     metrics = calculate_metrics(predictions)
     family_summary = build_family_summary(metrics)
@@ -921,17 +898,17 @@ def main() -> int:
         "selection_rule": champion["selection_rule"],
         "runtime": {
             "compute_context": os.environ.get("COMPUTE_CONTEXT", "local"),
-            "framework": "pytorch",
-            "framework_version": torch.__version__,
-            "hardware_type": "gpu" if device.type == "cuda" else "cpu",
-            "device": str(device),
-            "gpu_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "",
-            "cuda_version": torch.version.cuda or "",
+            "framework": "tensorflow",
+            "framework_version": tf.__version__,
+            "hardware_type": runtime_context["hardware_type"],
+            "device": runtime_context["device"],
+            "gpu_name": runtime_context["gpu_name"],
+            "cuda_version": runtime_context["cuda_version"],
             "deterministic": deterministic,
             "chunk_dir": chunk_dir,
             "checkpoint_dir": checkpoint_dir,
             "resume": resume,
-            "runner_contract_version": NEURAL_RUNNER_CONTRACT_VERSION,
+            "runner_contract_version": TENSORFLOW_RUNNER_CONTRACT_VERSION,
             "shard_index": args.shard_index,
             "shard_count": args.shard_count,
             "mlflow_tracking_uri": args.mlflow_tracking_uri,
@@ -946,8 +923,8 @@ def main() -> int:
         write_parquet_uri(join_uri(dashboard_base_uri, filename), frame)
     write_json_uri(join_uri(dashboard_base_uri, "champion_selection.json"), champion)
     write_json_uri(join_uri(dashboard_base_uri, "experiment_manifest.json"), manifest)
-    logger.info("Produced %s predictions across %s neural model/as-of records.", len(predictions), len(model_runs))
-    logger.info("Wrote neural results to %s", results_base_uri)
+    logger.info("Produced %s predictions across %s TensorFlow model/as-of records.", len(predictions), len(model_runs))
+    logger.info("Wrote TensorFlow neural results to %s", results_base_uri)
     return 0
 
 

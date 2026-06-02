@@ -274,3 +274,80 @@ The dashboard should merge monthly neural finalist artifacts into the primary
 cross-family leaderboard. The monthly neural block uses the same April 2011
 through March 2026 target window as the classical models. Keep quarterly neural
 screen artifacts separate or label them explicitly as screening-only views.
+
+## Focused Architecture Refinement
+
+`experiment_configs/phase_c_neural_architecture_refinement.yaml` is a
+performance-push experiment built around the strongest monthly GRU and LSTM
+results. It keeps the full monthly synthetic-deployment window, but narrows the
+search to residual models and four informative feature families.
+
+The grid retains the leading GRU and LSTM controls, then tests:
+
+- nearby learning rates;
+- shorter and longer sequence histories;
+- wider recurrent layers;
+- three-layer recurrent stacks;
+- deeper nonlinear dense heads;
+- a `500` epoch safety ceiling with early stopping and learning-rate reduction;
+- a close PyTorch analogue of the earlier successful Keras LSTM with explicit
+  dropout between recurrent layers and before the dense head.
+
+The PyTorch runner now supports `inter_recurrent_dropouts`,
+`pre_head_dropout`, `lr_factor`, and `min_lr` as recorded architecture
+parameters. PyTorch's standard `nn.LSTM` does not expose the exact
+Keras-style recurrent-state dropout behavior, so the analogue is deliberately
+described as close rather than identical.
+
+The higher epoch ceiling is headroom rather than an expectation that every fit
+should train longer. The prior finalists usually found their best checkpoint
+early, but some rolling months reached the earlier ceiling. Once a new finalist
+is selected, rerun it across multiple random seeds before treating small score
+differences as meaningful.
+
+Plan the focused refinement before launching it:
+
+```bash
+python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_neural_architecture_refinement.yaml
+```
+
+## TensorFlow/Keras Replication Runner
+
+`run_tensorflow_neural_models.py` is a sibling runner for cases where
+Keras-native recurrent behavior is part of the hypothesis. It writes the same
+artifact tables as the PyTorch runner, but records `framework=tensorflow` in
+the model-run metadata.
+
+The first TensorFlow config is:
+
+```text
+experiment_configs/phase_c_tensorflow_keras_lstm_replication.yaml
+```
+
+Use the tiny smoke config first on a new machine:
+
+```text
+experiment_configs/phase_c_tensorflow_keras_lstm_smoke.yaml
+```
+
+It is deliberately smaller than the PyTorch refinement grid. The goal is to
+test whether the earlier notebook-style LSTM behavior was tied to Keras
+implementation details such as `recurrent_dropout`, explicit inter-layer
+dropout, and the `ReduceLROnPlateau` schedule.
+
+The initial TensorFlow block includes:
+
+- the high-capacity `1000 -> 100` LSTM structure;
+- explicit dropout after the first recurrent layer and before the dense head;
+- Keras `recurrent_dropout=0.1`;
+- dense `l2(1e-4)` regularization;
+- `ReduceLROnPlateau(factor=0.65, patience=10, min_lr=1e-6)`;
+- three focused feature families and residual mode.
+
+Plan it before launching:
+
+```bash
+python plan_neural_experiment.py \
+  --config experiment_configs/phase_c_tensorflow_keras_lstm_replication.yaml
+```

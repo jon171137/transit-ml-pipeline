@@ -1,0 +1,74 @@
+experiment_id: phase_c_tensorflow_keras_lstm_smoke
+description: >
+  Tiny TensorFlow/Keras smoke test for the sibling runner. Use this before the
+  full monthly replication run to verify TensorFlow, GPU visibility, feature
+  artifacts, and output writing.
+
+status: smoke-test
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: /tmp/transit_phase_c_tensorflow_smoke/results
+  dashboard_base_uri: /tmp/transit_phase_c_tensorflow_smoke/dashboard
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2024-01-01
+  as_of_end: 2024-06-01
+  as_of_frequency_months: 1
+  min_train_rows: 30
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: /tmp/transit_phase_c_tensorflow_smoke/chunks
+    checkpoint_dir: /tmp/transit_phase_c_tensorflow_smoke/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-tensorflow
+    run_name: phase_c_tensorflow_keras_lstm_smoke
+
+feature_families:
+  include:
+    - history_recent
+
+modes:
+  - residual
+
+policy_representation_variants:
+  - {feature_policy: none, representation_policy: sequence_raw}
+
+models:
+  lstm:
+    enabled: true
+    param_grid:
+      - sequence_length: 36
+        recurrent_hidden_sizes: [1000, 100]
+        activation: tanh
+        dropout: 0.1
+        recurrent_dropout: 0.1
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        dense_l2: 0.0001
+        weight_decay: 0.0001
+        learning_rate: 0.0025
+        batch_size: 24
+        max_epochs: 5
+        early_stopping_patience: 2
+        lr_patience: 1
+        lr_factor: 0.65
+        min_lr: 0.000001
+        validation_rows: 12
