@@ -2118,14 +2118,13 @@ def main() -> None:
             order=MODEL_BUILD_ORDER,
         )
         build_scope = apply_optional_multi_filter(family_scope, "model_build", model_builds)
-        mode_options = sorted(str(value) for value in build_scope["mode"].dropna().unique())
-        mode = filter_cols[2].selectbox(
+        mode = all_selectbox(
             "Mode",
-            mode_options,
-            index=selectbox_index(mode_options, champion.get("mode")),
-            key="forecast_mode",
+            build_scope["mode"],
+            "forecast_mode",
+            filter_cols[2],
         )
-        mode_scope = build_scope[build_scope["mode"].astype(str) == mode]
+        mode_scope = apply_optional_filter(build_scope, "mode", mode)
         forecast_rank_label = filter_cols[3].selectbox(
             "Rank by",
             available_rank_options(leaderboard),
