@@ -1,31 +1,28 @@
-PROJECT_OVERVIEW = """
+PROJECT_OVERVIEW_CASE_STUDY = """
 ### What This Project Is
 
-This project is a forecasting lab built around monthly transit ridership and
-service data. Transit ridership is a useful case study because it combines
-several forecasting problems in one place. The series has strong seasonality,
-long-run trend, operational context, economic context, and a large structural
-break. That makes it a compact but realistic setting for studying model
-behavior under changing conditions.
+- Forecasting lab built around monthly transit ridership and service data.
+- Uses transit ridership as a compact case study with seasonality, trend,
+  operational context, economic context, and a major structural break.
+- Studies how model behavior changes across ordinary periods, COVID shock,
+  recovery, and the more recent operating regime.
+- Designed as both a modeling study and a systems-design artifact.
+"""
 
-The project is designed as both a modeling study and a systems-design artifact.
 
+PROJECT_OVERVIEW_SYSTEM = """
 ### What The System Does
 
-The pipeline ingests and normalizes several data sources, builds a monthly
-integrated feature table, creates feature families, trains forecasting models
-across repeated historical as-of dates, and publishes curated artifacts for
-this dashboard.
+- Ingests and normalizes transit, service, fuel, inflation, and income context.
+- Builds a monthly integrated feature table and feature-family definitions.
+- Trains models across repeated historical as-of dates.
+- Publishes curated Parquet/JSON artifacts for dashboard exploration.
+- Uses AWS for production-shaped orchestration and local/GPU runs for broader
+  experimentation.
+"""
 
-The AWS version demonstrates a production-shaped workflow: containerized Python
-jobs, ECS tasks, Step Functions orchestration, S3 artifact storage, CloudWatch
-logs, and dashboard-ready outputs. The local version is designed for broader
-experimentation where running many model and feature combinations would be
-cheaper and easier on a personal machine.
 
-That split is intentional. AWS proves the workflow can be orchestrated and
-monitored in a cloud environment. Local runs provide the freedom to scale up the
-research grid using my own compute resources.
+PROJECT_OVERVIEW = """
 
 ### What The Experiment Simulates
 
@@ -54,68 +51,94 @@ autoregressive, and neural-net model families under one artifact contract.
 """
 
 
-SYSTEM_OVERVIEW = """
+SYSTEM_ARCHITECTURE = """
 ### Architecture
 
-The system is split into a production-shaped AWS path and a larger local
-research path. AWS handles the repeatable pipeline demonstration: containerized
-Python jobs run through ECS, Step Functions controls ordering and parallel
-normalization, S3 stores versioned artifacts, and CloudWatch captures operational
-logs.
-
-The local path handles broader experiments. The runners write portable
-Parquet/JSON artifacts, MLflow receives experiment tracking metadata, DuckDB
-builds a queryable analytical mart, and the dashboard reads a curated export
-rather than querying raw training outputs directly.
-
-### Reasoning
-
-The goal is not to make AWS do every expensive experiment. The AWS pipeline
-shows that the workflow can be orchestrated and monitored in a realistic cloud
-environment, while local runs handle broader model sweeps where cost and
-iteration speed matter more.
-
-### Alternatives In Context
-
-Future versions can compare ECS jobs with Batch, Lambda for lighter ingestion,
-managed training jobs, or a fuller MLflow-backed registry. The current design is
-kept intentionally legible for a portfolio reviewer: the cloud side proves
-orchestration, while the local side proves experiment breadth and artifact
-discipline.
+- AWS path demonstrates a production-shaped workflow with containerized Python
+  jobs, ECS tasks, Step Functions orchestration, S3 artifacts, and CloudWatch
+  logs.
+- Local path handles broader experiment sweeps where cost and iteration speed
+  matter more.
+- Training runners write portable Parquet/JSON artifacts under a shared
+  metadata contract.
+- DuckDB builds a queryable analytical mart, then exports dashboard-ready files.
+- Streamlit reads curated static artifacts so the public app stays fast and
+  inexpensive to host.
 """
 
 
-DATA_OVERVIEW = """
+SYSTEM_REASONING = """
+### Reasoning
+
+- AWS proves orchestration, repeatability, logging, and artifact handoff.
+- Local/GPU runs make large model grids practical without turning cloud cost
+  into the main constraint.
+- The dashboard consumes the same artifact shape regardless of where training
+  happened.
+- This split keeps the project readable as a portfolio system while still
+  supporting deep experimentation.
+"""
+
+
+SYSTEM_OVERVIEW = """
+### Alternatives In Context
+
+- AWS Batch could replace ECS for larger queued training workloads.
+- Lambda remains useful for lighter ingestion or source-specific fetch steps.
+- Managed training jobs would make sense if the project moved toward scheduled
+  retraining at scale.
+- A fuller MLflow registry could promote candidates into explicit model stages.
+- The current design favors clarity: cloud orchestration plus local experiment
+  breadth under one artifact contract.
+"""
+
+
+DATA_PRIMARY_EDA = """
 ### Primary EDA
 
-The core series is monthly transit ridership and service context. The target in
-the current experiment is H3 UPT, forecast three months ahead from each rolling
-as-of month. The data has seasonality, trend, and a visible COVID-era structural
-break, which makes it a useful forecasting case.
+- Core series is monthly transit ridership and service context.
+- Current target is H3 UPT, forecast three months ahead from each rolling
+  as-of month.
+- Series includes seasonality, trend, and a visible COVID-era structural break.
+- Useful for testing whether models handle both ordinary seasonality and
+  disrupted operating regimes.
+"""
 
+
+DATA_SECONDARY_EDA = """
 ### Secondary EDA
 
-External context includes gas prices, CPI/inflation, and King County median
-household income. Income is annual FRED data converted into prior-year monthly
-context, so each forecast month uses information that would have been known
-without borrowing from the future. These features are not assumed to be magic
-predictors; they create testable hypotheses about economic pressure and changing
-travel behavior.
+- External context includes gas prices, CPI/inflation, and King County median
+  household income.
+- Income is annual FRED data converted into prior-year monthly context.
+- Forecast months only use context that would have been known at the as-of date.
+- These features create testable hypotheses about economic pressure and
+  changing travel behavior.
+"""
 
+
+DATA_CALCULATED_FEATURES = """
 ### Calculated Features
 
-The feature table includes lags, rolling summaries, regime flags, exogenous
-signals, income pressure indicators, and targeted interaction terms. The current
-stable feature snapshot contains income-aware families such as
-`history_regime_income`, `history_regime_income_pressure`, and
-`history_regime_income_linear_interactions`.
+- Feature table includes lags, rolling summaries, regime flags, exogenous
+  signals, income pressure indicators, and targeted interaction terms.
+- Income-aware families include `history_regime_income`,
+  `history_regime_income_pressure`, and
+  `history_regime_income_linear_interactions`.
+- Feature families define human-readable modeling strategies before
+  model-specific feature policies are applied.
+"""
 
+
+DATA_TIME_FEATURES = """
 ### Time-Based Features
 
-Time features represent month-of-year seasonality, long-run trend, target-month
-context, and COVID/recovery regimes. They support direct raw forecasts, residual
-models built around a seasonal naive baseline, and time-series models that
-receive compact exogenous sets.
+- Time features represent month-of-year seasonality, long-run trend,
+  target-month context, and COVID/recovery regimes.
+- They support raw/direct forecasts and residual models built around a seasonal
+  naive baseline.
+- Autoregressive and neural sequence models use the same rolling as-of frame,
+  with compact exogenous or sequence representations where appropriate.
 """
 
 

@@ -2,6 +2,7 @@ import json
 import os
 from html import escape
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import plotly.express as px
@@ -10,23 +11,37 @@ import streamlit as st
 
 try:
     from content import (
-        DATA_OVERVIEW,
+        DATA_CALCULATED_FEATURES,
+        DATA_PRIMARY_EDA,
+        DATA_SECONDARY_EDA,
+        DATA_TIME_FEATURES,
         EXPERIMENT_OVERVIEW,
         PERIOD_METRIC_EXPLANATION,
         PERIOD_METRIC_SHORT_EXPLANATION,
         PROJECT_OVERVIEW,
+        PROJECT_OVERVIEW_CASE_STUDY,
+        PROJECT_OVERVIEW_SYSTEM,
         REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
+        SYSTEM_ARCHITECTURE,
         SYSTEM_OVERVIEW,
+        SYSTEM_REASONING,
     )
 except ImportError:
     from dashboard.content import (
-        DATA_OVERVIEW,
+        DATA_CALCULATED_FEATURES,
+        DATA_PRIMARY_EDA,
+        DATA_SECONDARY_EDA,
+        DATA_TIME_FEATURES,
         EXPERIMENT_OVERVIEW,
         PERIOD_METRIC_EXPLANATION,
         PERIOD_METRIC_SHORT_EXPLANATION,
         PROJECT_OVERVIEW,
+        PROJECT_OVERVIEW_CASE_STUDY,
+        PROJECT_OVERVIEW_SYSTEM,
         REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
+        SYSTEM_ARCHITECTURE,
         SYSTEM_OVERVIEW,
+        SYSTEM_REASONING,
     )
 
 
@@ -55,6 +70,8 @@ MODEL_BUILD_ORDER = [
     "gru",
     "lstm",
 ]
+BASELINE_MODEL_FAMILIES = {"baseline"}
+BASELINE_MODEL_BUILDS = {"seasonal_naive", "naive"}
 REQUIRED_FILES = {
     "forecast_paths": "forecast_paths.parquet",
     "performance_over_time": "performance_over_time.parquet",
@@ -551,8 +568,12 @@ def render_data_page(
     champion: dict,
     feature_families: dict,
 ) -> None:
-    st.subheader("Data")
-    st.markdown(DATA_OVERVIEW)
+    data_intro_cols = st.columns(2)
+    data_intro_cols[0].markdown(DATA_PRIMARY_EDA)
+    data_intro_cols[1].markdown(DATA_SECONDARY_EDA)
+    data_feature_cols = st.columns(2)
+    data_feature_cols[0].markdown(DATA_CALCULATED_FEATURES)
+    data_feature_cols[1].markdown(DATA_TIME_FEATURES)
 
     st.markdown("### Source And Processing Map")
     source_rows = [
@@ -612,13 +633,10 @@ def render_data_page(
             index=0,
             key="data_feature_family_definition_select",
         )
-        selected_features = pd.DataFrame(
-            {
-                "position": range(1, len(feature_families[selected_family]) + 1),
-                "feature_name": feature_families[selected_family],
-            }
-        )
-        st.dataframe(selected_features, use_container_width=True, hide_index=True)
+        selected_features = [str(feature) for feature in feature_families[selected_family]]
+        feature_cols = st.columns(4)
+        for index, feature_name in enumerate(selected_features):
+            feature_cols[index % len(feature_cols)].markdown(f"- `{feature_name}`")
 
         with st.expander("Show the feature family definition JSON"):
             st.code(json.dumps(feature_families, indent=2), language="json")
@@ -1046,17 +1064,27 @@ def enrich_score_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def filtered_frame(
     df: pd.DataFrame,
-    model_family: str = "All",
-    model_build: str = "All",
-    mode: str = "All",
-    feature_family: str = "All",
-    feature_policy: str = "All",
+    model_family="All",
+    model_build="All",
+    mode="All",
+    feature_family="All",
+    feature_policy="All",
 ) -> pd.DataFrame:
-    out = apply_optional_filter(df, "model_family", model_family)
-    out = apply_optional_filter(out, "model_build", model_build)
-    out = apply_optional_filter(out, "mode", mode)
-    out = apply_optional_filter(out, "feature_family_name", feature_family)
-    out = apply_optional_filter(out, "feature_policy", feature_policy)
+    out = apply_optional_value_filter(df, "model_family", model_family)
+    out = apply_optional_value_filter(out, "model_build", model_build)
+    out = apply_optional_value_filter(out, "mode", mode)
+    out = apply_optional_value_filter(out, "feature_family_name", feature_family)
+    out = apply_optional_value_filter(out, "feature_policy", feature_policy)
+    return out
+
+
+def exclude_baseline_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep seasonal naive as a chart reference, not as an interactive candidate model."""
+    out = df.copy()
+    if "model_family" in out:
+        out = out[~out["model_family"].astype(str).isin(BASELINE_MODEL_FAMILIES)]
+    if "model_build" in out:
+        out = out[~out["model_build"].astype(str).isin(BASELINE_MODEL_BUILDS)]
     return out
 
 
@@ -1181,10 +1209,18 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
         xaxis_title="Target month",
         yaxis_title="UPT",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
-        margin=dict(l=10, r=10, t=50, b=95),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.3,
+            xanchor="left",
+            x=0,
+            tracegroupgap=4,
+        ),
+        margin=dict(l=10, r=10, t=50, b=145),
+        height=560,
     )
-    fig.update_xaxes(title_standoff=18)
+    fig.update_xaxes(title_standoff=28)
     return fig
 
 
@@ -1218,10 +1254,40 @@ def all_selectbox(label: str, values: pd.Series, key: str, container=st) -> str:
     return container.selectbox(label, ["All"] + clean_values, key=key)
 
 
+def optional_multiselect(
+    label: str,
+    values: pd.Series,
+    key: str,
+    container=st,
+    order: Optional[list[str]] = None,
+) -> list[str]:
+    clean_values = ordered_unique(values, order)
+    return container.multiselect(
+        label,
+        clean_values,
+        default=[],
+        key=key,
+        placeholder="All",
+        help="Leave empty to include all options.",
+    )
+
+
 def apply_optional_filter(df: pd.DataFrame, column: str, value: str) -> pd.DataFrame:
     if value == "All" or column not in df:
         return df
     return df[df[column].astype(str) == value]
+
+
+def apply_optional_multi_filter(df: pd.DataFrame, column: str, values: list[str]) -> pd.DataFrame:
+    if not values or column not in df:
+        return df
+    return df[df[column].astype(str).isin([str(value) for value in values])]
+
+
+def apply_optional_value_filter(df: pd.DataFrame, column: str, value) -> pd.DataFrame:
+    if isinstance(value, list):
+        return apply_optional_multi_filter(df, column, value)
+    return apply_optional_filter(df, column, value)
 
 
 def parse_json_display(value) -> str:
@@ -1371,10 +1437,18 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
         xaxis_title="Target month",
         yaxis_title="UPT",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
-        margin=dict(l=10, r=10, t=50, b=95),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.34,
+            xanchor="left",
+            x=0,
+            tracegroupgap=4,
+        ),
+        margin=dict(l=10, r=10, t=50, b=190),
+        height=650,
     )
-    fig.update_xaxes(title_standoff=18)
+    fig.update_xaxes(title_standoff=32)
     return fig
 
 
@@ -1570,6 +1644,77 @@ def metric_mapping_frame(
     return pd.concat(ranked_slices, ignore_index=True)
 
 
+def limit_configs_per_build(frame: pd.DataFrame, rank_label: str, per_build_limit: str) -> pd.DataFrame:
+    if frame.empty or per_build_limit == "All":
+        return frame
+    limit = int(per_build_limit.replace("Top ", ""))
+    ranked_slices = []
+    for _, group in frame.groupby("model_build", sort=False):
+        ranked_slices.append(sort_by_rank_metric(group, rank_label).head(limit))
+    if not ranked_slices:
+        return frame.iloc[0:0].copy()
+    limited = pd.concat(ranked_slices, ignore_index=True)
+    return sort_by_rank_metric(limited, rank_label)
+
+
+def average_forecast_paths_by_build(paths: pd.DataFrame, ranked_models: pd.DataFrame) -> pd.DataFrame:
+    if paths.empty or ranked_models.empty:
+        return paths.iloc[0:0].copy()
+
+    model_lookup = ranked_models[
+        ["model_config_id", "model_family", "model_build"]
+    ].drop_duplicates()
+    paths_with_build = paths.merge(model_lookup, on="model_config_id", how="inner", suffixes=("", "_model"))
+    if paths_with_build.empty:
+        return paths.iloc[0:0].copy()
+
+    aggregation = {
+        "actual": "first",
+        "prediction": "mean",
+    }
+    for column in ["baseline_prediction", "seasonal_naive_prediction"]:
+        if column in paths_with_build.columns:
+            aggregation[column] = "mean"
+
+    averaged = (
+        paths_with_build.groupby(["model_family", "model_build", "target_date"], as_index=False)
+        .agg(aggregation)
+        .sort_values(["model_family", "model_build", "target_date"])
+    )
+    build_order = {build: index for index, build in enumerate(MODEL_BUILD_ORDER)}
+    build_rank = {
+        build: index + 1
+        for index, build in enumerate(
+            sorted(averaged["model_build"].dropna().unique(), key=lambda value: build_order.get(str(value), 999))
+        )
+    }
+    averaged["rank"] = averaged["model_build"].map(build_rank)
+    averaged["model_config_id"] = "avg::" + averaged["model_build"].astype(str)
+    averaged["feature_family_name"] = "Average of selected configs"
+    averaged["mode"] = "average"
+    return averaged
+
+
+def average_performance_by_build(performance: pd.DataFrame, ranked_models: pd.DataFrame) -> pd.DataFrame:
+    if performance.empty or ranked_models.empty:
+        return performance.iloc[0:0].copy()
+
+    model_lookup = ranked_models[
+        ["config_id", "model_family", "model_build"]
+    ].drop_duplicates()
+    perf_with_build = performance.merge(model_lookup, on="config_id", how="inner", suffixes=("", "_model"))
+    if perf_with_build.empty:
+        return performance.iloc[0:0].copy()
+
+    averaged = (
+        perf_with_build.groupby(["model_family", "model_build", "as_of_date"], as_index=False)
+        .agg(rolling_6mo_mae=("rolling_6mo_mae", "mean"))
+        .sort_values(["model_family", "model_build", "as_of_date"])
+    )
+    averaged["config_id"] = "avg::" + averaged["model_build"].astype(str)
+    return averaged
+
+
 def aggregate_metric_mapping(frame: pd.DataFrame, x_metric: str, y_metric: str) -> pd.DataFrame:
     x_col, _ = RANK_METRIC_OPTIONS[x_metric]
     y_col, _ = RANK_METRIC_OPTIONS[y_metric]
@@ -1723,16 +1868,6 @@ def main() -> None:
         run_dirs,
         format_func=lambda path: path.name if path.name != "latest" else str(path),
     )
-    page = st.sidebar.radio(
-        "Section",
-        [
-            "Project Overview",
-            "System",
-            "Data",
-            "Experiment",
-            "Results Explorer",
-        ],
-    )
 
     artifacts = load_artifacts(selected_dir)
     forecast_paths = ensure_model_taxonomy(
@@ -1771,14 +1906,43 @@ def main() -> None:
     ]:
         if "feature_policy" not in frame:
             frame["feature_policy"] = "none"
+    candidate_leaderboard = exclude_baseline_candidates(leaderboard)
 
     render_project_banner()
     render_dashboard_header(champion, forecast_paths, experiment_manifest)
 
-    if page == "Project Overview":
-        st.subheader("Project Overview")
-        render_public_bundle_note(experiment_manifest)
+    (
+        tab_project_overview,
+        tab_system,
+        tab_data,
+        tab_experiment,
+        tab_modeling_overview,
+        tab_forecast,
+        tab_performance,
+        tab_metric_mapping,
+        tab_features,
+        tab_ops,
+    ) = st.tabs(
+        [
+            "Project Overview",
+            "System",
+            "Data",
+            "Experiment",
+            "Modeling Overview",
+            "Forecast Explorer",
+            "Model Performance",
+            "Metric Mapping",
+            "Feature Strategy",
+            "Operational Footprint",
+        ]
+    )
+
+    with tab_project_overview:
+        overview_intro_cols = st.columns(2)
+        overview_intro_cols[0].markdown(PROJECT_OVERVIEW_CASE_STUDY)
+        overview_intro_cols[1].markdown(PROJECT_OVERVIEW_SYSTEM)
         st.markdown(PROJECT_OVERVIEW)
+        render_public_bundle_note(experiment_manifest)
 
         overview_cols = st.columns(4)
         overview_cols[0].metric(
@@ -1788,22 +1952,21 @@ def main() -> None:
         overview_cols[1].metric("Model Configs", format_int(len(leaderboard)))
         overview_cols[2].metric("Rolling Predictions", format_int(len(forecast_paths)))
         overview_cols[3].metric("Target Window", date_range_label(forecast_paths, "target_date"))
-        return
 
-    if page == "System":
-        st.subheader("System")
+    with tab_system:
+        system_cols = st.columns(2)
+        system_cols[0].markdown(SYSTEM_ARCHITECTURE)
+        system_cols[1].markdown(SYSTEM_REASONING)
         st.markdown(SYSTEM_OVERVIEW)
         render_image_gallery(
             "System Screenshots",
             "Drop architecture sketches, AWS Step Functions captures, or other system screenshots here as the cloud side evolves.",
         )
-        return
 
-    if page == "Data":
+    with tab_data:
         render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
-        return
 
-    if page == "Experiment":
+    with tab_experiment:
         render_experiment_page(
             leaderboard,
             forecast_paths,
@@ -1814,79 +1977,75 @@ def main() -> None:
             phase_b_config_text,
             phase_c_config_text,
         )
-        return
-
-    (
-        tab_modeling_overview,
-        tab_forecast,
-        tab_performance,
-        tab_metric_mapping,
-        tab_features,
-        tab_ops,
-    ) = st.tabs(
-        [
-            "Modeling Overview",
-            "Forecast Explorer",
-            "Model Performance",
-            "Metric Mapping",
-            "Feature Strategy",
-            "Operational Footprint",
-        ]
-    )
 
     with tab_modeling_overview:
         st.subheader("Top Models Against Actual Ridership")
-        filter_cols = st.columns(6)
-        selected_model_family = all_selectbox(
-            "Model family",
-            leaderboard["model_family"],
-            "overview_model_family",
+        filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
+        selected_model_families = optional_multiselect(
+            "Model families",
+            candidate_leaderboard["model_family"],
+            "overview_model_families",
             filter_cols[0],
+            MODEL_FAMILY_ORDER,
         )
-        family_scope = apply_optional_filter(leaderboard, "model_family", selected_model_family)
-        selected_model_build = all_selectbox(
-            "Model build",
+        family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", selected_model_families)
+        selected_model_builds = optional_multiselect(
+            "Model builds",
             family_scope["model_build"],
-            "overview_model_build",
+            "overview_model_builds",
             filter_cols[1],
+            MODEL_BUILD_ORDER,
         )
-        build_scope = apply_optional_filter(family_scope, "model_build", selected_model_build)
+        build_scope = apply_optional_multi_filter(family_scope, "model_build", selected_model_builds)
         selected_mode = all_selectbox(
             "Mode",
             build_scope["mode"],
             "overview_mode",
             filter_cols[2],
         )
-        mode_scope = apply_optional_filter(build_scope, "mode", selected_mode)
-        selected_feature_family = all_selectbox(
-            "Feature family",
-            mode_scope["feature_family_name"],
-            "overview_feature_family",
-            filter_cols[3],
-        )
-        feature_scope = apply_optional_filter(mode_scope, "feature_family_name", selected_feature_family)
-        selected_feature_policy = all_selectbox(
-            "Feature policy",
-            feature_scope["feature_policy"],
-            "overview_feature_policy",
-            filter_cols[4],
-        )
-        metric_label = filter_cols[5].selectbox(
+        metric_label = filter_cols[3].selectbox(
             "Rank by",
             available_rank_options(leaderboard),
             key="overview_metric",
         )
+        mode_scope = apply_optional_filter(build_scope, "mode", selected_mode)
+        filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
+        selected_feature_families = optional_multiselect(
+            "Feature families",
+            mode_scope["feature_family_name"],
+            "overview_feature_families",
+            filter_cols_secondary[0],
+        )
+        feature_scope = apply_optional_multi_filter(mode_scope, "feature_family_name", selected_feature_families)
+        selected_feature_policies = optional_multiselect(
+            "Feature policies",
+            feature_scope["feature_policy"],
+            "overview_feature_policies",
+            filter_cols_secondary[1],
+        )
+        overview_per_build_limit = filter_cols_secondary[2].selectbox(
+            "Configs per build",
+            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            index=0,
+            key="overview_per_build_limit",
+        )
+        overview_path_mode = filter_cols_secondary[3].selectbox(
+            "Path mode",
+            ["Each configuration", "Average by model build"],
+            key="overview_path_mode",
+        )
         filtered_top = filtered_frame(
-            leaderboard,
-            model_family=selected_model_family,
-            model_build=selected_model_build,
+            candidate_leaderboard,
+            model_family=selected_model_families,
+            model_build=selected_model_builds,
             mode=selected_mode,
-            feature_family=selected_feature_family,
-            feature_policy=selected_feature_policy,
+            feature_family=selected_feature_families,
+            feature_policy=selected_feature_policies,
         )
         metric = RANK_METRIC_OPTIONS[metric_label][0]
         if metric in filtered_top:
             filtered_top = sort_by_rank_metric(filtered_top, metric_label).copy()
+        filtered_top = limit_configs_per_build(filtered_top, metric_label, overview_per_build_limit)
 
         candidate_configs = filtered_top["model_config_id"].tolist()
         chart_paths = forecast_paths[forecast_paths["model_config_id"].isin(candidate_configs)].copy()
@@ -1917,12 +2076,18 @@ def main() -> None:
             overview_target_start,
             overview_target_end,
         )
-        selected_models, chart_paths, duplicate_count = select_distinct_model_paths(
-            filtered_top,
-            windowed_paths,
-            max_models=5,
-        )
-        chart_paths = chart_paths.sort_values(["rank", "target_date"])
+        if overview_path_mode == "Average by model build":
+            selected_models = filtered_top.copy()
+            chart_paths = average_forecast_paths_by_build(windowed_paths, filtered_top)
+            duplicate_count = 0
+        else:
+            max_paths = 25 if overview_per_build_limit != "All" else 10
+            selected_models, chart_paths, duplicate_count = select_distinct_model_paths(
+                filtered_top,
+                windowed_paths,
+                max_models=max_paths,
+            )
+            chart_paths = chart_paths.sort_values(["rank", "target_date"])
 
         if metric_label in PERIOD_RANK_WINDOWS:
             st.caption(
@@ -1936,10 +2101,10 @@ def main() -> None:
             )
 
         st.plotly_chart(
-            top_model_chart(chart_paths, "Top Five Model Paths"),
+            top_model_chart(chart_paths, "Selected Model Paths"),
             use_container_width=True,
         )
-        st.dataframe(overview_table(selected_models), hide_index=True, use_container_width=True)
+        st.dataframe(overview_table(selected_models.head(50)), hide_index=True, use_container_width=True)
 
         with st.expander("Champion selection rule"):
             st.write(champion.get("selection_rule", "No selection rule recorded."))
@@ -1949,235 +2114,302 @@ def main() -> None:
 
     with tab_forecast:
         st.subheader("Forecast Explorer")
-        filter_cols = st.columns(6)
-        model_family_options = ordered_unique(leaderboard["model_family"], MODEL_FAMILY_ORDER)
-        model_family = filter_cols[0].selectbox(
-            "Model family",
-            model_family_options,
-            index=selectbox_index(model_family_options, champion.get("model_family")),
-            key="forecast_model_family",
+        filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
+        model_families = optional_multiselect(
+            "Model families",
+            candidate_leaderboard["model_family"],
+            key="forecast_model_families",
+            container=filter_cols[0],
+            order=MODEL_FAMILY_ORDER,
         )
-        family_scope = leaderboard[leaderboard["model_family"].astype(str) == model_family]
-        default_build = champion.get("model_build") if champion.get("model_family") == model_family else None
-        build_options = ordered_unique(family_scope["model_build"], MODEL_BUILD_ORDER)
-        model_build = filter_cols[1].selectbox(
-            "Model build",
-            build_options,
-            index=selectbox_index(build_options, default_build),
-            key="forecast_model_build",
+        family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", model_families)
+        model_builds = optional_multiselect(
+            "Model builds",
+            family_scope["model_build"],
+            key="forecast_model_builds",
+            container=filter_cols[1],
+            order=MODEL_BUILD_ORDER,
         )
-        build_scope = family_scope[family_scope["model_build"].astype(str) == model_build]
-        default_mode = (
-            champion.get("mode")
-            if champion.get("model_family") == model_family and champion.get("model_build") == model_build
-            else None
-        )
+        build_scope = apply_optional_multi_filter(family_scope, "model_build", model_builds)
         mode_options = sorted(str(value) for value in build_scope["mode"].dropna().unique())
         mode = filter_cols[2].selectbox(
             "Mode",
             mode_options,
-            index=selectbox_index(mode_options, default_mode),
+            index=selectbox_index(mode_options, champion.get("mode")),
             key="forecast_mode",
         )
         mode_scope = build_scope[build_scope["mode"].astype(str) == mode]
-        default_family = (
-            champion.get("feature_family_name")
-            if champion.get("model_family") == model_family
-            and champion.get("model_build") == model_build
-            and champion.get("mode") == mode
-            else None
-        )
-        family_options = sorted(str(value) for value in mode_scope["feature_family_name"].dropna().unique())
-        family = filter_cols[3].selectbox(
-            "Feature family",
-            family_options,
-            index=selectbox_index(family_options, default_family),
-            key="forecast_feature_family",
-        )
-        policy_scope = build_scope[
-            (build_scope["mode"].astype(str) == mode)
-            & (build_scope["feature_family_name"].astype(str) == family)
-        ]
-        default_policy = (
-            champion.get("feature_policy", "none")
-            if champion.get("model_family") == model_family
-            and champion.get("model_build") == model_build
-            and champion.get("mode") == mode
-            and champion.get("feature_family_name") == family
-            else None
-        )
-        policy_options = sorted(str(value) for value in policy_scope["feature_policy"].dropna().unique())
-        feature_policy = filter_cols[4].selectbox(
-            "Feature policy",
-            policy_options,
-            index=selectbox_index(policy_options, default_policy),
-            key="forecast_feature_policy",
-        )
-        forecast_rank_label = filter_cols[5].selectbox(
+        forecast_rank_label = filter_cols[3].selectbox(
             "Rank by",
             available_rank_options(leaderboard),
             key="forecast_metric",
         )
+        filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
+        feature_families = optional_multiselect(
+            "Feature families",
+            mode_scope["feature_family_name"],
+            key="forecast_feature_families",
+            container=filter_cols_secondary[0],
+        )
+        feature_scope = apply_optional_multi_filter(mode_scope, "feature_family_name", feature_families)
+        feature_policies = optional_multiselect(
+            "Feature policies",
+            feature_scope["feature_policy"],
+            key="forecast_feature_policies",
+            container=filter_cols_secondary[1],
+        )
+        forecast_per_build_limit = filter_cols_secondary[2].selectbox(
+            "Configs per build",
+            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            index=0,
+            key="forecast_per_build_limit",
+        )
+        forecast_path_mode = filter_cols_secondary[3].selectbox(
+            "Path mode",
+            ["Each configuration", "Average by model build"],
+            key="forecast_path_mode",
+        )
         ranked_candidates = filtered_frame(
-            leaderboard,
-            model_family=model_family,
-            model_build=model_build,
+            candidate_leaderboard,
+            model_family=model_families,
+            model_build=model_builds,
             mode=mode,
-            feature_family=family,
-            feature_policy=feature_policy,
+            feature_family=feature_families,
+            feature_policy=feature_policies,
         )
         ranked_candidates = sort_by_rank_metric(ranked_candidates, forecast_rank_label)
+        ranked_candidates = limit_configs_per_build(
+            ranked_candidates,
+            forecast_rank_label,
+            forecast_per_build_limit,
+        )
         if ranked_candidates.empty:
             st.info("No model configurations match the selected filters.")
-            return
+        elif forecast_path_mode == "Average by model build":
+            st.markdown("**Top matching ranked models**")
+            st.dataframe(
+                forecast_ranked_table(ranked_candidates.head(50)),
+                hide_index=True,
+                use_container_width=True,
+            )
+            average_candidates = forecast_paths[
+                forecast_paths["config_id"].isin(ranked_candidates["config_id"])
+            ].copy()
+            date_cols = st.columns([1, 1, 1, 1, 1])
+            as_of_min, as_of_max = date_bounds(average_candidates, "as_of_date")
+            target_min, target_max = date_bounds(average_candidates, "target_date")
+            forecast_as_of_start = date_cols[0].date_input(
+                "As-of start",
+                as_of_min.date(),
+                min_value=as_of_min.date(),
+                max_value=as_of_max.date(),
+                key="forecast_avg_as_of_start",
+            )
+            forecast_as_of_end = date_cols[1].date_input(
+                "As-of end",
+                as_of_max.date(),
+                min_value=as_of_min.date(),
+                max_value=as_of_max.date(),
+                key="forecast_avg_as_of_end",
+            )
+            forecast_target_start = date_cols[2].date_input(
+                "Target start",
+                target_min.date(),
+                min_value=target_min.date(),
+                max_value=target_max.date(),
+                key="forecast_avg_target_start",
+            )
+            forecast_target_end = date_cols[3].date_input(
+                "Target end",
+                target_max.date(),
+                min_value=target_min.date(),
+                max_value=target_max.date(),
+                key="forecast_avg_target_end",
+            )
+            average_candidates = apply_date_window(
+                average_candidates,
+                "as_of_date",
+                forecast_as_of_start,
+                forecast_as_of_end,
+            )
+            average_candidates = apply_date_window(
+                average_candidates,
+                "target_date",
+                forecast_target_start,
+                forecast_target_end,
+            )
+            averaged_paths = average_forecast_paths_by_build(average_candidates, ranked_candidates)
+            st.plotly_chart(
+                top_model_chart(averaged_paths, "Average Forecast vs Actual by Model Build"),
+                use_container_width=True,
+            )
+        else:
+            selected_labels = [
+                ranked_model_label(row, forecast_rank_label)
+                for _, row in ranked_candidates.iterrows()
+            ]
+            label_by_config = dict(zip(ranked_candidates["config_id"], selected_labels))
+            default_config = (
+                champion.get("config_id")
+                if champion.get("config_id") in label_by_config
+                else ranked_candidates.iloc[0]["config_id"]
+            )
+            selected_label = st.selectbox(
+                "Selected ranked model",
+                selected_labels,
+                index=selected_labels.index(label_by_config[default_config]),
+                key="forecast_ranked_model",
+            )
+            label_to_config = dict(zip(selected_labels, ranked_candidates["config_id"]))
+            config_id = label_to_config[selected_label]
+            selected_model = ranked_candidates[ranked_candidates["config_id"] == config_id].iloc[0]
+            st.caption(
+                "Hyperparameters: "
+                f"{parse_json_display(selected_model.get('hyperparameters_json', '{}'))}. "
+                f"Ranked by {forecast_rank_label.lower()} within the active filters."
+            )
 
-        selected_labels = [
-            ranked_model_label(row, forecast_rank_label)
-            for _, row in ranked_candidates.iterrows()
-        ]
-        label_by_config = dict(zip(ranked_candidates["config_id"], selected_labels))
-        default_config = (
-            champion.get("config_id")
-            if champion.get("config_id") in label_by_config
-            else ranked_candidates.iloc[0]["config_id"]
-        )
-        selected_label = st.selectbox(
-            "Selected ranked model",
-            selected_labels,
-            index=selected_labels.index(label_by_config[default_config]),
-            key="forecast_ranked_model",
-        )
-        label_to_config = dict(zip(selected_labels, ranked_candidates["config_id"]))
-        config_id = label_to_config[selected_label]
-        selected_model = ranked_candidates[ranked_candidates["config_id"] == config_id].iloc[0]
-        st.caption(
-            "Hyperparameters: "
-            f"{parse_json_display(selected_model.get('hyperparameters_json', '{}'))}. "
-            f"Ranked by {forecast_rank_label.lower()} within the active filters."
-        )
+            st.markdown("**Top matching ranked models**")
+            st.dataframe(
+                forecast_ranked_table(ranked_candidates.head(10)),
+                hide_index=True,
+                use_container_width=True,
+            )
 
-        st.markdown("**Top matching ranked models**")
-        st.dataframe(
-            forecast_ranked_table(ranked_candidates.head(10)),
-            hide_index=True,
-            use_container_width=True,
-        )
-
-        candidates = forecast_paths[forecast_paths["config_id"] == config_id].copy()
-        date_cols = st.columns([1, 1, 1, 1, 1])
-        as_of_min, as_of_max = date_bounds(candidates, "as_of_date")
-        target_min, target_max = date_bounds(candidates, "target_date")
-        forecast_as_of_start = date_cols[0].date_input(
-            "As-of start",
-            as_of_min.date(),
-            min_value=as_of_min.date(),
-            max_value=as_of_max.date(),
-            key="forecast_as_of_start",
-        )
-        forecast_as_of_end = date_cols[1].date_input(
-            "As-of end",
-            as_of_max.date(),
-            min_value=as_of_min.date(),
-            max_value=as_of_max.date(),
-            key="forecast_as_of_end",
-        )
-        forecast_target_start = date_cols[2].date_input(
-            "Target start",
-            target_min.date(),
-            min_value=target_min.date(),
-            max_value=target_max.date(),
-            key="forecast_target_start",
-        )
-        forecast_target_end = date_cols[3].date_input(
-            "Target end",
-            target_max.date(),
-            min_value=target_min.date(),
-            max_value=target_max.date(),
-            key="forecast_target_end",
-        )
-        selected_forecast = candidates.sort_values("target_date")
-        selected_forecast = apply_date_window(
-            selected_forecast,
-            "as_of_date",
-            forecast_as_of_start,
-            forecast_as_of_end,
-        )
-        selected_forecast = apply_date_window(
-            selected_forecast,
-            "target_date",
-            forecast_target_start,
-            forecast_target_end,
-        )
-        st.plotly_chart(
-            line_forecast_chart(selected_forecast, "Selected Forecast vs Actual"),
-            use_container_width=True,
-        )
-        st.dataframe(
-            selected_forecast[
-                [
-                    "as_of_date",
-                    "target_date",
-                    "actual",
-                    "prediction",
-                    "seasonal_naive_prediction",
-                    "error",
-                    "abs_error",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
+            candidates = forecast_paths[forecast_paths["config_id"] == config_id].copy()
+            date_cols = st.columns([1, 1, 1, 1, 1])
+            as_of_min, as_of_max = date_bounds(candidates, "as_of_date")
+            target_min, target_max = date_bounds(candidates, "target_date")
+            forecast_as_of_start = date_cols[0].date_input(
+                "As-of start",
+                as_of_min.date(),
+                min_value=as_of_min.date(),
+                max_value=as_of_max.date(),
+                key="forecast_as_of_start",
+            )
+            forecast_as_of_end = date_cols[1].date_input(
+                "As-of end",
+                as_of_max.date(),
+                min_value=as_of_min.date(),
+                max_value=as_of_max.date(),
+                key="forecast_as_of_end",
+            )
+            forecast_target_start = date_cols[2].date_input(
+                "Target start",
+                target_min.date(),
+                min_value=target_min.date(),
+                max_value=target_max.date(),
+                key="forecast_target_start",
+            )
+            forecast_target_end = date_cols[3].date_input(
+                "Target end",
+                target_max.date(),
+                min_value=target_min.date(),
+                max_value=target_max.date(),
+                key="forecast_target_end",
+            )
+            selected_forecast = candidates.sort_values("target_date")
+            selected_forecast = apply_date_window(
+                selected_forecast,
+                "as_of_date",
+                forecast_as_of_start,
+                forecast_as_of_end,
+            )
+            selected_forecast = apply_date_window(
+                selected_forecast,
+                "target_date",
+                forecast_target_start,
+                forecast_target_end,
+            )
+            st.plotly_chart(
+                line_forecast_chart(selected_forecast, "Selected Forecast vs Actual"),
+                use_container_width=True,
+            )
+            st.dataframe(
+                selected_forecast[
+                    [
+                        "as_of_date",
+                        "target_date",
+                        "actual",
+                        "prediction",
+                        "seasonal_naive_prediction",
+                        "error",
+                        "abs_error",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
     with tab_performance:
         st.subheader("Model Leaderboard")
-        perf_filter_cols = st.columns(6)
-        perf_model_family = all_selectbox(
-            "Model family",
-            leaderboard["model_family"],
-            "performance_model_family",
+        perf_filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
+        perf_model_families = optional_multiselect(
+            "Model families",
+            candidate_leaderboard["model_family"],
+            "performance_model_families",
             perf_filter_cols[0],
+            MODEL_FAMILY_ORDER,
         )
-        perf_family_scope = apply_optional_filter(leaderboard, "model_family", perf_model_family)
-        perf_model_build = all_selectbox(
-            "Model build",
+        perf_family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", perf_model_families)
+        perf_model_builds = optional_multiselect(
+            "Model builds",
             perf_family_scope["model_build"],
-            "performance_model_build",
+            "performance_model_builds",
             perf_filter_cols[1],
+            MODEL_BUILD_ORDER,
         )
-        perf_build_scope = apply_optional_filter(perf_family_scope, "model_build", perf_model_build)
+        perf_build_scope = apply_optional_multi_filter(perf_family_scope, "model_build", perf_model_builds)
         perf_mode = all_selectbox("Mode", perf_build_scope["mode"], "performance_mode", perf_filter_cols[2])
         perf_mode_scope = apply_optional_filter(perf_build_scope, "mode", perf_mode)
-        perf_feature_family = all_selectbox(
-            "Feature family",
-            perf_mode_scope["feature_family_name"],
-            "performance_feature_family",
-            perf_filter_cols[3],
-        )
-        perf_feature_scope = apply_optional_filter(
-            perf_mode_scope,
-            "feature_family_name",
-            perf_feature_family,
-        )
-        perf_feature_policy = all_selectbox(
-            "Feature policy",
-            perf_feature_scope["feature_policy"],
-            "performance_feature_policy",
-            perf_filter_cols[4],
-        )
-        perf_rank_label = perf_filter_cols[5].selectbox(
+        perf_rank_label = perf_filter_cols[3].selectbox(
             "Rank by",
             available_rank_options(leaderboard),
             key="performance_metric",
         )
+        perf_filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
+        perf_feature_families = optional_multiselect(
+            "Feature families",
+            perf_mode_scope["feature_family_name"],
+            "performance_feature_families",
+            perf_filter_cols_secondary[0],
+        )
+        perf_feature_scope = apply_optional_multi_filter(
+            perf_mode_scope,
+            "feature_family_name",
+            perf_feature_families,
+        )
+        perf_feature_policies = optional_multiselect(
+            "Feature policies",
+            perf_feature_scope["feature_policy"],
+            "performance_feature_policies",
+            perf_filter_cols_secondary[1],
+        )
+        perf_per_build_limit = perf_filter_cols_secondary[2].selectbox(
+            "Configs per build",
+            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            index=0,
+            key="performance_per_build_limit",
+        )
+        perf_path_mode = perf_filter_cols_secondary[3].selectbox(
+            "Path mode",
+            ["Each configuration", "Average by model build"],
+            key="performance_path_mode",
+        )
         filtered_leaderboard = filtered_frame(
-            leaderboard,
-            model_family=perf_model_family,
-            model_build=perf_model_build,
+            candidate_leaderboard,
+            model_family=perf_model_families,
+            model_build=perf_model_builds,
             mode=perf_mode,
-            feature_family=perf_feature_family,
-            feature_policy=perf_feature_policy,
+            feature_family=perf_feature_families,
+            feature_policy=perf_feature_policies,
         )
         filtered_leaderboard = sort_by_rank_metric(filtered_leaderboard, perf_rank_label)
+        filtered_leaderboard = limit_configs_per_build(
+            filtered_leaderboard,
+            perf_rank_label,
+            perf_per_build_limit,
+        )
 
         display_cols = [
             "rank",
@@ -2293,7 +2525,7 @@ def main() -> None:
             max_value=perf_as_of_max.date(),
             key="performance_as_of_end",
         )
-        top_configs = filtered_leaderboard.head(8)["config_id"].tolist()
+        top_configs = filtered_leaderboard["config_id"].tolist()
         rolling_subset = performance[performance["config_id"].isin(top_configs)].copy()
         rolling_subset = apply_date_window(
             rolling_subset,
@@ -2301,6 +2533,12 @@ def main() -> None:
             perf_as_of_start,
             perf_as_of_end,
         )
+        if perf_path_mode == "Average by model build":
+            rolling_subset = average_performance_by_build(rolling_subset, filtered_leaderboard)
+        else:
+            rolling_subset = rolling_subset[
+                rolling_subset["config_id"].isin(filtered_leaderboard.head(12)["config_id"])
+            ].copy()
         st.plotly_chart(rolling_error_chart(rolling_subset), use_container_width=True)
 
         st.subheader("Model Build Comparison")
@@ -2342,7 +2580,7 @@ def main() -> None:
             "not another."
         )
         metric_options = available_rank_options(leaderboard)
-        build_options = ordered_unique(leaderboard["model_build"], MODEL_BUILD_ORDER)
+        build_options = ordered_unique(candidate_leaderboard["model_build"], MODEL_BUILD_ORDER)
         control_cols = st.columns([1, 1, 1, 1, 1])
         x_metric = control_cols[0].selectbox(
             "X axis",
@@ -2386,7 +2624,7 @@ def main() -> None:
         )
 
         mapping_frame = metric_mapping_frame(
-            leaderboard,
+            candidate_leaderboard,
             selected_builds,
             rank_metric,
             per_build_limit,

@@ -25,6 +25,7 @@ htmlcov/
 # Local logs and scratch outputs
 logs/
 *.log
+*.zip
 tmp/
 temp/
 
