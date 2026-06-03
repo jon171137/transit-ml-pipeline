@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -9,40 +10,26 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-try:
-    from content import (
-        DATA_CALCULATED_FEATURES,
-        DATA_PRIMARY_EDA,
-        DATA_SECONDARY_EDA,
-        DATA_TIME_FEATURES,
-        EXPERIMENT_OVERVIEW,
-        PERIOD_METRIC_EXPLANATION,
-        PERIOD_METRIC_SHORT_EXPLANATION,
-        PROJECT_OVERVIEW,
-        PROJECT_OVERVIEW_CASE_STUDY,
-        PROJECT_OVERVIEW_SYSTEM,
-        REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
-        SYSTEM_ARCHITECTURE,
-        SYSTEM_OVERVIEW,
-        SYSTEM_REASONING,
-    )
-except ImportError:
-    from dashboard.content import (
-        DATA_CALCULATED_FEATURES,
-        DATA_PRIMARY_EDA,
-        DATA_SECONDARY_EDA,
-        DATA_TIME_FEATURES,
-        EXPERIMENT_OVERVIEW,
-        PERIOD_METRIC_EXPLANATION,
-        PERIOD_METRIC_SHORT_EXPLANATION,
-        PROJECT_OVERVIEW,
-        PROJECT_OVERVIEW_CASE_STUDY,
-        PROJECT_OVERVIEW_SYSTEM,
-        REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
-        SYSTEM_ARCHITECTURE,
-        SYSTEM_OVERVIEW,
-        SYSTEM_REASONING,
-    )
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
+from content import (
+    DATA_CALCULATED_FEATURES,
+    DATA_PRIMARY_EDA,
+    DATA_SECONDARY_EDA,
+    DATA_TIME_FEATURES,
+    EXPERIMENT_OVERVIEW,
+    PERIOD_METRIC_EXPLANATION,
+    PERIOD_METRIC_SHORT_EXPLANATION,
+    PROJECT_OVERVIEW,
+    PROJECT_OVERVIEW_CASE_STUDY,
+    PROJECT_OVERVIEW_SYSTEM,
+    REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
+    SYSTEM_ARCHITECTURE,
+    SYSTEM_OVERVIEW,
+    SYSTEM_REASONING,
+)
 
 
 DEFAULT_ARTIFACT_DIR = Path("dashboard/public_artifacts/latest")
