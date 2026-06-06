@@ -209,19 +209,24 @@ def inject_site_theme() -> None:
         }
 
         .block-container {
-            padding-top: 1.6rem;
+            padding-top: 0.55rem;
         }
 
         .portfolio-banner {
-            border-top: 7px solid var(--portfolio-teal);
+            border-top: 4px solid var(--portfolio-teal);
             background: linear-gradient(90deg, rgba(0, 127, 104, 0.11), rgba(7, 95, 237, 0.04));
             border-bottom: 1px solid rgba(0, 127, 104, 0.16);
-            padding: 0.7rem 1rem;
-            margin: -0.2rem 0 1.4rem;
+            padding: 0.45rem 0.85rem;
+            margin: 0 0 0.45rem;
             color: var(--portfolio-ink);
             font-size: 0.92rem;
             font-weight: 600;
             letter-spacing: 0;
+        }
+
+        .element-container:has(.portfolio-banner),
+        .element-container:has(.dashboard-hero) {
+            margin-bottom: 0 !important;
         }
 
         .portfolio-banner span {
@@ -312,19 +317,19 @@ def inject_site_theme() -> None:
 
         .dashboard-hero {
             display: block;
-            margin: 0.6rem 0 1.2rem;
+            margin: 0.15rem 0 0.7rem;
         }
 
         .dashboard-title h1 {
             margin: 0;
-            font-size: 2.35rem;
-            line-height: 1.08;
+            font-size: 2.2rem;
+            line-height: 1.03;
         }
 
         .dashboard-title p {
             color: var(--portfolio-muted);
-            margin: 0.7rem 0 0;
-            font-size: 0.96rem;
+            margin: 0.3rem 0 0;
+            font-size: 0.93rem;
         }
 
         .champion-summary {
@@ -392,6 +397,24 @@ def inject_site_theme() -> None:
         button[role="tab"][aria-selected="true"] {
             color: var(--portfolio-teal-dark);
             border-bottom-color: var(--portfolio-teal) !important;
+        }
+
+        div[data-testid="stTabs"] {
+            margin-top: 0.25rem;
+        }
+
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            gap: 0.75rem;
+        }
+
+        div[data-testid="stTabs"] [data-baseweb="tab"] {
+            min-height: 2.35rem;
+            padding-top: 0.15rem;
+            padding-bottom: 0.35rem;
+        }
+
+        div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+            padding-top: 0.9rem;
         }
 
         button[kind="primary"],
@@ -606,6 +629,18 @@ def display_model_family_name(value: str) -> str:
     return labels.get(str(value), str(value).replace("_", " ").title())
 
 
+def display_model_family_prefix(value: str) -> str:
+    labels = {
+        "baseline": "Baseline",
+        "linear": "Linear",
+        "autoregressive": "Autoregressive",
+        "tree": "Tree",
+        "neural_net": "Neural Net",
+        "neural": "Neural Net",
+    }
+    return labels.get(str(value), str(value).replace("_", " ").title())
+
+
 def display_model_build_name(value: str) -> str:
     labels = {
         "seasonal_naive": "Seasonal naive",
@@ -623,6 +658,10 @@ def display_model_build_name(value: str) -> str:
         "rnn": "RNN",
     }
     return labels.get(str(value), str(value).replace("_", " ").title())
+
+
+def model_build_display_label(model_family, model_build) -> str:
+    return f"{display_model_family_prefix(model_family)}: {display_model_build_name(model_build)}"
 
 
 def configurations_label(value) -> str:
@@ -1133,6 +1172,11 @@ def ensure_model_taxonomy(df: pd.DataFrame) -> pd.DataFrame:
             out["model_build"] = out["model_type"].map(model_build_for)
     if "model_config_id" not in out and "config_id" in out:
         out["model_config_id"] = out["config_id"]
+    if {"model_family", "model_build"}.issubset(out.columns):
+        out["model_build_label"] = [
+            model_build_display_label(family, build)
+            for family, build in zip(out["model_family"], out["model_build"])
+        ]
     return out
 
 
@@ -1208,11 +1252,13 @@ def filtered_frame(
     df: pd.DataFrame,
     model_family="All",
     model_build="All",
+    model_build_label="All",
     mode="All",
     feature_family="All",
     feature_policy="All",
 ) -> pd.DataFrame:
-    out = apply_optional_value_filter(df, "model_family", model_family)
+    out = apply_optional_value_filter(df, "model_build_label", model_build_label)
+    out = apply_optional_value_filter(out, "model_family", model_family)
     out = apply_optional_value_filter(out, "model_build", model_build)
     out = apply_optional_value_filter(out, "mode", mode)
     out = apply_optional_value_filter(out, "feature_family_name", feature_family)
@@ -1280,6 +1326,15 @@ def ordered_unique(values: pd.Series, ordered_values=None) -> list[str]:
     if not ordered_values:
         return sorted(clean_values)
     return sorted(clean_values, key=lambda value: order_index(value, ordered_values))
+
+
+def ordered_model_build_labels(df: pd.DataFrame) -> list[str]:
+    if df.empty or "model_build_label" not in df:
+        return []
+    label_rows = model_taxonomy_sort(
+        df[["model_family", "model_build", "model_build_label"]].drop_duplicates()
+    )
+    return label_rows["model_build_label"].tolist()
 
 
 def model_taxonomy_sort(df: pd.DataFrame) -> pd.DataFrame:
@@ -1526,8 +1581,12 @@ def ranked_model_label(row: pd.Series, metric_label: str) -> str:
         else f"{metric_label.lower()} N/A"
     )
     params = shorthand_hyperparameters(row.get("hyperparameters_json", "{}"))
+    build_label = row.get(
+        "model_build_label",
+        model_build_display_label(row.get("model_family", ""), row.get("model_build", row.get("model_type", "model"))),
+    )
     return (
-        f"#{int(row['rank'])} | {row.get('model_build', row.get('model_type', 'model'))} "
+        f"#{int(row['rank'])} | {build_label} "
         f"| {row.get('mode', '-')} | {row.get('feature_family_name', '-')} "
         f"| {metric_fragment} | MAE {format_int(row.get('mae'))} "
         f"| RMSE {format_int(row.get('rmse'))} | {params}"
@@ -1572,7 +1631,7 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
     for _, group in paths.sort_values(["rank", "target_date"]).groupby("model_config_id", sort=False):
         first = group.iloc[0]
         label = (
-            f"#{int(first['rank'])} {first.get('model_build', first.get('model_type', 'model'))} | "
+            f"#{int(first['rank'])} {first.get('model_build_label', first.get('model_build', first.get('model_type', 'model')))} | "
             f"{first.get('feature_family_name', '-')}"
         )
         fig.add_trace(
@@ -1668,6 +1727,7 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         display["hyperparameters"] = "N/A"
     columns = [
         "rank",
+        "model_build_label",
         "model_family",
         "model_build",
         "feature_family_name",
@@ -1731,6 +1791,7 @@ def forecast_ranked_table(ranked_models: pd.DataFrame) -> pd.DataFrame:
         display["hyperparameters"] = "N/A"
     columns = [
         "rank",
+        "model_build_label",
         "model_build",
         "mode",
         "feature_family_name",
@@ -1783,19 +1844,19 @@ def sort_by_rank_metric(df: pd.DataFrame, label: str) -> pd.DataFrame:
 
 def metric_mapping_frame(
     leaderboard: pd.DataFrame,
-    model_builds: list[str],
+    model_build_labels: list[str],
     rank_label: str,
     per_build_limit: str,
 ) -> pd.DataFrame:
-    if not model_builds:
+    if not model_build_labels:
         return leaderboard.iloc[0:0].copy()
-    frame = leaderboard[leaderboard["model_build"].astype(str).isin(model_builds)].copy()
+    frame = leaderboard[leaderboard["model_build_label"].astype(str).isin(model_build_labels)].copy()
     if per_build_limit == "All":
         return frame
 
     limit = int(per_build_limit.replace("Top ", ""))
     ranked_slices = []
-    for _, group in frame.groupby("model_build", sort=False):
+    for _, group in frame.groupby("model_build_label", sort=False):
         ranked_slices.append(sort_by_rank_metric(group, rank_label).head(limit))
     if not ranked_slices:
         return frame.iloc[0:0].copy()
@@ -1807,7 +1868,8 @@ def limit_configs_per_build(frame: pd.DataFrame, rank_label: str, per_build_limi
         return frame
     limit = int(per_build_limit.replace("Top ", ""))
     ranked_slices = []
-    for _, group in frame.groupby("model_build", sort=False):
+    group_col = "model_build_label" if "model_build_label" in frame.columns else "model_build"
+    for _, group in frame.groupby(group_col, sort=False):
         ranked_slices.append(sort_by_rank_metric(group, rank_label).head(limit))
     if not ranked_slices:
         return frame.iloc[0:0].copy()
@@ -1820,7 +1882,7 @@ def average_forecast_paths_by_build(paths: pd.DataFrame, ranked_models: pd.DataF
         return paths.iloc[0:0].copy()
 
     model_lookup = ranked_models[
-        ["model_config_id", "model_family", "model_build"]
+        ["model_config_id", "model_family", "model_build", "model_build_label"]
     ].drop_duplicates()
     paths_with_build = paths.merge(model_lookup, on="model_config_id", how="inner", suffixes=("", "_model"))
     if paths_with_build.empty:
@@ -1835,7 +1897,7 @@ def average_forecast_paths_by_build(paths: pd.DataFrame, ranked_models: pd.DataF
             aggregation[column] = "mean"
 
     averaged = (
-        paths_with_build.groupby(["model_family", "model_build", "target_date"], as_index=False)
+        paths_with_build.groupby(["model_family", "model_build", "model_build_label", "target_date"], as_index=False)
         .agg(aggregation)
         .sort_values(["model_family", "model_build", "target_date"])
     )
@@ -1858,14 +1920,14 @@ def average_performance_by_build(performance: pd.DataFrame, ranked_models: pd.Da
         return performance.iloc[0:0].copy()
 
     model_lookup = ranked_models[
-        ["config_id", "model_family", "model_build"]
+        ["config_id", "model_family", "model_build", "model_build_label"]
     ].drop_duplicates()
     perf_with_build = performance.merge(model_lookup, on="config_id", how="inner", suffixes=("", "_model"))
     if perf_with_build.empty:
         return performance.iloc[0:0].copy()
 
     averaged = (
-        perf_with_build.groupby(["model_family", "model_build", "as_of_date"], as_index=False)
+        perf_with_build.groupby(["model_family", "model_build", "model_build_label", "as_of_date"], as_index=False)
         .agg(rolling_6mo_mae=("rolling_6mo_mae", "mean"))
         .sort_values(["model_family", "model_build", "as_of_date"])
     )
@@ -1876,7 +1938,7 @@ def average_performance_by_build(performance: pd.DataFrame, ranked_models: pd.Da
 def aggregate_metric_mapping(frame: pd.DataFrame, x_metric: str, y_metric: str) -> pd.DataFrame:
     x_col, _ = RANK_METRIC_OPTIONS[x_metric]
     y_col, _ = RANK_METRIC_OPTIONS[y_metric]
-    group_cols = ["model_family", "model_build"]
+    group_cols = ["model_family", "model_build", "model_build_label"]
     optional_cols = [
         "mae",
         "rmse",
@@ -1919,6 +1981,7 @@ def aggregate_metric_mapping(frame: pd.DataFrame, x_metric: str, y_metric: str) 
 def metric_mapping_hover_columns(frame: pd.DataFrame) -> list[str]:
     columns = [
         "model_family",
+        "model_build_label",
         "model_build",
         "feature_family_name",
         "feature_policy",
@@ -1986,6 +2049,7 @@ def metric_mapping_chart(
             x_col: x_metric,
             y_col: y_metric,
             "model_family": "Model family",
+            "model_build_label": "Model build",
             "model_build": "Model build",
             "feature_policy": "Feature policy",
         },
@@ -2129,30 +2193,21 @@ def main() -> None:
     with tab_modeling_overview:
         render_champion_snapshot(champion, forecast_paths, experiment_manifest)
         st.subheader("Top Models Against Actual Ridership")
-        filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
-        selected_model_families = optional_multiselect(
-            "Model families",
-            candidate_leaderboard["model_family"],
-            "overview_model_families",
-            filter_cols[0],
-            MODEL_FAMILY_ORDER,
-        )
-        family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", selected_model_families)
-        selected_model_builds = optional_multiselect(
+        filter_cols = st.columns([2.1, 1.0, 1.2])
+        selected_model_build_labels = optional_multiselect(
             "Model builds",
-            family_scope["model_build"],
+            pd.Series(ordered_model_build_labels(candidate_leaderboard)),
             "overview_model_builds",
-            filter_cols[1],
-            MODEL_BUILD_ORDER,
+            filter_cols[0],
         )
-        build_scope = apply_optional_multi_filter(family_scope, "model_build", selected_model_builds)
+        build_scope = apply_optional_multi_filter(candidate_leaderboard, "model_build_label", selected_model_build_labels)
         selected_mode = all_selectbox(
             "Mode",
             build_scope["mode"],
             "overview_mode",
-            filter_cols[2],
+            filter_cols[1],
         )
-        metric_label = filter_cols[3].selectbox(
+        metric_label = filter_cols[2].selectbox(
             "Rank by",
             available_rank_options(leaderboard),
             key="overview_metric",
@@ -2185,8 +2240,7 @@ def main() -> None:
         )
         filtered_top = filtered_frame(
             candidate_leaderboard,
-            model_family=selected_model_families,
-            model_build=selected_model_builds,
+            model_build_label=selected_model_build_labels,
             mode=selected_mode,
             feature_family=selected_feature_families,
             feature_policy=selected_feature_policies,
@@ -2306,7 +2360,7 @@ def main() -> None:
         comparison_agg = "min" if comparison_ascending else "max"
         if comparison_metric in filtered_top.columns and not filtered_top.empty:
             model_summary = (
-                filtered_top.groupby(["model_family", "model_build"], as_index=False)
+                filtered_top.groupby(["model_family", "model_build", "model_build_label"], as_index=False)
                 .agg(
                     best_mae=("mae", "min"),
                     best_rmse=("rmse", "min"),
@@ -2316,15 +2370,15 @@ def main() -> None:
             )
             fig = px.bar(
                 model_summary,
-                x="model_build",
+                x="model_build_label",
                 y="best_metric",
                 color="model_family",
                 category_orders={
                     "model_family": MODEL_FAMILY_ORDER,
-                    "model_build": MODEL_BUILD_ORDER,
+                    "model_build_label": ordered_model_build_labels(model_summary),
                 },
                 labels={
-                    "model_build": "Model build",
+                    "model_build_label": "Model build",
                     "model_family": "Model family",
                     "best_metric": f"Best {metric_label}",
                 },
@@ -2399,7 +2453,7 @@ def main() -> None:
             "not another."
         )
         metric_options = available_rank_options(leaderboard)
-        build_options = ordered_unique(candidate_leaderboard["model_build"], MODEL_BUILD_ORDER)
+        build_options = ordered_model_build_labels(candidate_leaderboard)
         control_cols = st.columns([1, 1, 1, 1, 1])
         x_metric = control_cols[0].selectbox(
             "X axis",
@@ -2471,6 +2525,7 @@ def main() -> None:
             )
             table_cols = [
                 "model_family",
+                "model_build_label",
                 "model_build",
                 "mode",
                 "feature_policy",
