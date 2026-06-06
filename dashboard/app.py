@@ -209,15 +209,19 @@ def inject_site_theme() -> None:
         }
 
         .block-container {
-            padding-top: 0.55rem;
+            padding-top: 2.1rem;
         }
 
         .portfolio-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
             border-top: 4px solid var(--portfolio-teal);
             background: linear-gradient(90deg, rgba(0, 127, 104, 0.11), rgba(7, 95, 237, 0.04));
             border-bottom: 1px solid rgba(0, 127, 104, 0.16);
-            padding: 0.45rem 0.85rem;
-            margin: 0 0 0.45rem;
+            padding: 0.55rem 0.9rem;
+            margin: 0 0 0.7rem;
             color: var(--portfolio-ink);
             font-size: 0.92rem;
             font-weight: 600;
@@ -231,6 +235,20 @@ def inject_site_theme() -> None:
 
         .portfolio-banner span {
             color: var(--portfolio-teal-dark);
+        }
+
+        .portfolio-title {
+            color: var(--portfolio-ink);
+            font-size: 1.45rem;
+            line-height: 1.05;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .portfolio-links {
+            color: var(--portfolio-ink);
+            text-align: right;
+            white-space: nowrap;
         }
 
         .portfolio-banner a {
@@ -392,6 +410,17 @@ def inject_site_theme() -> None:
             .dashboard-hero {
                 grid-template-columns: 1fr;
             }
+
+            .portfolio-banner {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 0.35rem;
+            }
+
+            .portfolio-links {
+                text-align: left;
+                white-space: normal;
+            }
         }
 
         button[role="tab"][aria-selected="true"] {
@@ -435,10 +464,13 @@ def render_project_banner() -> None:
     st.markdown(
         """
         <div class="portfolio-banner">
-            <span>Personal Forecasting Project</span> by
-            <a href="https://www.linkedin.com/in/sellersjon" target="_blank" rel="noopener noreferrer">Jon Sellers</a>
-            <span class="banner-link-divider">|</span>
-            <a href="https://github.com/jon171137/transit-ml-pipeline" target="_blank" rel="noopener noreferrer">GitHub Repo</a>
+            <div class="portfolio-title">Transit Forecasting Lab</div>
+            <div class="portfolio-links">
+                <span>Personal Forecasting Project</span> by
+                <a href="https://www.linkedin.com/in/sellersjon" target="_blank" rel="noopener noreferrer">Jon Sellers</a>
+                <span class="banner-link-divider">|</span>
+                <a href="https://github.com/jon171137/transit-ml-pipeline" target="_blank" rel="noopener noreferrer">GitHub Repo</a>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -533,17 +565,7 @@ def render_dashboard_header(
     forecast_paths: pd.DataFrame,
     experiment_manifest: dict,
 ) -> None:
-    st.markdown(
-        """
-        <div class="dashboard-hero">
-            <div class="dashboard-title">
-                <h1>Transit Forecasting Lab</h1>
-                <p>Rolling H3 UPT forecast comparison across local and AWS-shaped pipeline artifacts</p>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    return None
 
 
 def render_champion_snapshot(
@@ -2135,15 +2157,15 @@ def main() -> None:
 
     (
         tab_project_overview,
-        tab_system,
         tab_data,
+        tab_system,
         tab_experiment,
         tab_modeling_overview,
     ) = st.tabs(
         [
             "Project Overview",
-            "System",
             "Data",
+            "System",
             "Experiment",
             "Model Explorer",
         ]
@@ -2165,6 +2187,9 @@ def main() -> None:
         overview_cols[2].metric("Rolling Predictions", format_int(len(forecast_paths)))
         overview_cols[3].metric("Target Window", date_range_label(forecast_paths, "target_date"))
 
+    with tab_data:
+        render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
+
     with tab_system:
         system_cols = st.columns(2)
         system_cols[0].markdown(SYSTEM_ARCHITECTURE)
@@ -2174,9 +2199,6 @@ def main() -> None:
             "System Screenshots",
             "Drop architecture sketches, AWS Step Functions captures, or other system screenshots here as the cloud side evolves.",
         )
-
-    with tab_data:
-        render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
 
     with tab_experiment:
         render_experiment_page(
