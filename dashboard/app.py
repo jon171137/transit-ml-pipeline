@@ -16,6 +16,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 from content import (
     DATA_CALCULATED_FEATURES,
+    DATA_AS_OF_REGIME_FEATURES,
     DATA_PRIMARY_EDA,
     DATA_SECONDARY_EDA,
     DATA_TIME_FEATURES,
@@ -202,6 +203,11 @@ def inject_site_theme() -> None:
             --portfolio-surface: #f7faf9;
         }
 
+        html, body, [data-testid="stAppViewContainer"], .stApp {
+            background: #ffffff;
+            color: var(--portfolio-ink);
+        }
+
         .block-container {
             padding-top: 1.6rem;
         }
@@ -242,6 +248,10 @@ def inject_site_theme() -> None:
         h1, h2, h3 {
             color: var(--portfolio-ink);
             letter-spacing: 0;
+        }
+
+        p, li, label, span {
+            color: inherit;
         }
 
         [data-testid="stSidebar"] {
@@ -301,10 +311,7 @@ def inject_site_theme() -> None:
         }
 
         .dashboard-hero {
-            display: grid;
-            grid-template-columns: minmax(300px, 1.1fr) minmax(360px, 0.9fr);
-            gap: 1.5rem;
-            align-items: start;
+            display: block;
             margin: 0.6rem 0 1.2rem;
         }
 
@@ -354,6 +361,22 @@ def inject_site_theme() -> None:
             line-height: 1.2;
             font-weight: 700;
             overflow-wrap: anywhere;
+        }
+
+        .champion-summary p {
+            font-size: 0.9rem;
+            line-height: 1.35;
+            margin: 0 0 0.45rem;
+        }
+
+        .champion-summary ul {
+            margin: 0.5rem 0 0;
+            padding-left: 1.15rem;
+        }
+
+        .champion-summary li {
+            margin-bottom: 0.4rem;
+            line-height: 1.35;
         }
 
         @media (max-width: 1200px) {
@@ -454,7 +477,53 @@ def champion_summary_item(label: str, value) -> str:
     )
 
 
+def summary_panel_from_markdown(markdown_text: str) -> str:
+    title = "Summary"
+    items = []
+    current_item = None
+    for raw_line in markdown_text.strip().splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            title = line.replace("### ", "", 1).strip()
+        elif line.startswith("- "):
+            if current_item:
+                items.append(current_item)
+            current_item = line.replace("- ", "", 1).strip()
+        elif current_item:
+            current_item += " " + line
+    if current_item:
+        items.append(current_item)
+
+    item_html = "".join(f"<li>{escape(item)}</li>" for item in items)
+    return (
+        '<div class="champion-summary">'
+        f'<div class="summary-title">{escape(title)}</div>'
+        f"<ul>{item_html}</ul>"
+        "</div>"
+    )
+
+
 def render_dashboard_header(
+    champion: dict,
+    forecast_paths: pd.DataFrame,
+    experiment_manifest: dict,
+) -> None:
+    st.markdown(
+        """
+        <div class="dashboard-hero">
+            <div class="dashboard-title">
+                <h1>Transit Forecasting Lab</h1>
+                <p>Rolling H3 UPT forecast comparison across local and AWS-shaped pipeline artifacts</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_champion_snapshot(
     champion: dict,
     forecast_paths: pd.DataFrame,
     experiment_manifest: dict,
@@ -477,18 +546,12 @@ def render_dashboard_header(
     ]
     st.markdown(
         """
-        <div class="dashboard-hero">
-            <div class="dashboard-title">
-                <h1>Transit Forecasting Lab</h1>
-                <p>Rolling H3 UPT forecast comparison across local and AWS-shaped pipeline artifacts</p>
-            </div>
-            <div class="champion-summary">
-                <div class="summary-title">Current Champion Snapshot</div>
-                <div class="champion-summary-grid">
+        <div class="champion-summary">
+            <div class="summary-title">Current Champion Snapshot</div>
+            <div class="champion-summary-grid">
         """
         + "".join(champion_summary_item(label, value) for label, value in summary_items)
         + """
-                </div>
             </div>
         </div>
         """,
@@ -531,6 +594,70 @@ def render_experiment_summary(
     )
 
 
+def display_model_family_name(value: str) -> str:
+    labels = {
+        "baseline": "Baseline",
+        "linear": "Linear Models",
+        "autoregressive": "Autoregressive Models",
+        "tree": "Tree-Based Models",
+        "neural_net": "Neural Nets",
+        "neural": "Neural Nets",
+    }
+    return labels.get(str(value), str(value).replace("_", " ").title())
+
+
+def display_model_build_name(value: str) -> str:
+    labels = {
+        "seasonal_naive": "Seasonal naive",
+        "elastic_net": "Elastic net",
+        "random_forest": "Random forest",
+        "extra_trees": "Extra trees",
+        "xgboost": "XGBoost",
+        "arima": "ARIMA",
+        "sarima": "SARIMA",
+        "sarimax": "SARIMAX",
+        "gru": "GRU",
+        "lstm": "LSTM",
+        "mlp": "MLP",
+        "cnn": "CNN",
+        "rnn": "RNN",
+    }
+    return labels.get(str(value), str(value).replace("_", " ").title())
+
+
+def configurations_label(value) -> str:
+    count = format_int(value)
+    noun = "configuration" if pd.notna(value) and int(value) == 1 else "configurations"
+    return f"{count} {noun}"
+
+
+def render_model_scope_summary(model_scope: pd.DataFrame) -> None:
+    st.markdown(model_scope_summary_html(model_scope), unsafe_allow_html=True)
+
+
+def model_scope_summary_html(model_scope: pd.DataFrame) -> str:
+    rows = []
+    for family, group in model_scope.groupby("model_family", sort=False):
+        build_parts = [
+            f"{display_model_build_name(row.model_build)} ({configurations_label(row.configurations)})"
+            for row in group.itertuples(index=False)
+        ]
+        rows.append(
+            "<p>"
+            f"<strong>{escape(display_model_family_name(family))}:</strong> "
+            f"{escape(', '.join(build_parts))}"
+            "</p>"
+        )
+    return "".join(rows)
+
+
+def experiment_overview_with_regime_note() -> str:
+    marker = "### Current Experiment Blocks"
+    if marker not in EXPERIMENT_OVERVIEW:
+        return EXPERIMENT_OVERVIEW + "\n\n" + DATA_AS_OF_REGIME_FEATURES
+    return EXPERIMENT_OVERVIEW.replace(marker, DATA_AS_OF_REGIME_FEATURES + "\n\n" + marker, 1)
+
+
 def render_public_bundle_note(experiment_manifest: dict) -> None:
     bundle = experiment_manifest.get("public_dashboard_bundle")
     if not bundle:
@@ -556,11 +683,11 @@ def render_data_page(
     feature_families: dict,
 ) -> None:
     data_intro_cols = st.columns(2)
-    data_intro_cols[0].markdown(DATA_PRIMARY_EDA)
-    data_intro_cols[1].markdown(DATA_SECONDARY_EDA)
+    data_intro_cols[0].markdown(summary_panel_from_markdown(DATA_PRIMARY_EDA), unsafe_allow_html=True)
+    data_intro_cols[1].markdown(summary_panel_from_markdown(DATA_SECONDARY_EDA), unsafe_allow_html=True)
     data_feature_cols = st.columns(2)
-    data_feature_cols[0].markdown(DATA_CALCULATED_FEATURES)
-    data_feature_cols[1].markdown(DATA_TIME_FEATURES)
+    data_feature_cols[0].markdown(summary_panel_from_markdown(DATA_CALCULATED_FEATURES), unsafe_allow_html=True)
+    data_feature_cols[1].markdown(summary_panel_from_markdown(DATA_TIME_FEATURES), unsafe_allow_html=True)
 
     st.markdown("### Source And Processing Map")
     source_rows = [
@@ -590,7 +717,38 @@ def render_data_page(
     st.markdown("### Feature Family Examples")
     if {"feature_family_name", "best_selection_score"}.issubset(family_summary.columns):
         family_display = family_summary.copy()
-        family_display = family_display.sort_values("best_selection_score").head(20)
+        score_column = (
+            "best_selection_score_balanced"
+            if "best_selection_score_balanced" in family_display.columns
+            else "best_selection_score"
+        )
+        family_display = family_display.sort_values(score_column).head(20)
+        family_columns = [
+            "feature_family_name",
+            "mode",
+            "best_selection_score_balanced",
+            "best_rmse",
+            "best_mae",
+            "best_r2",
+            "best_diracc",
+        ]
+        family_columns = [column for column in family_columns if column in family_display.columns]
+        curated_examples = [
+            ("history_regime_time", "raw"),
+            ("history_regime_time_linear_interactions", "residual"),
+            ("history_regime_income", None),
+            ("history_regime_cpi", None),
+        ]
+        curated_rows = []
+        for family_name, mode in curated_examples:
+            row_candidates = family_display[family_display["feature_family_name"] == family_name]
+            if mode is not None and "mode" in row_candidates:
+                row_candidates = row_candidates[row_candidates["mode"].astype(str) == mode]
+            if not row_candidates.empty:
+                curated_rows.append(row_candidates.iloc[[0]])
+        if curated_rows:
+            family_display = pd.concat(curated_rows, ignore_index=True)
+        family_display = family_display[family_columns]
         st.dataframe(family_display, use_container_width=True, hide_index=True)
     else:
         family_cols = [col for col in ["feature_family_name", "mode"] if col in family_summary]
@@ -601,19 +759,10 @@ def render_data_page(
         "These are the named feature families available to the Phase A tabular "
         "models. A feature family is the human-readable modeling strategy before "
         "any model-specific feature policy such as correlation pruning, mutual "
-        "information selection, or tree-importance selection is applied."
+        "information selection, or tree-importance selection is applied. Use the "
+        "inspector below to see what a selected family includes."
     )
     if feature_families:
-        family_rows = [
-            {
-                "feature_family_name": family_name,
-                "n_defined_features": len(features),
-                "included_features": ", ".join(features),
-            }
-            for family_name, features in sorted(feature_families.items())
-        ]
-        st.dataframe(pd.DataFrame(family_rows), use_container_width=True, hide_index=True)
-
         selected_family = st.selectbox(
             "Inspect one feature family",
             sorted(feature_families),
@@ -621,6 +770,9 @@ def render_data_page(
             key="data_feature_family_definition_select",
         )
         selected_features = [str(feature) for feature in feature_families[selected_family]]
+        feature_count = len(selected_features)
+        feature_word = "feature" if feature_count == 1 else "features"
+        st.caption(f"{feature_count} {feature_word} included")
         feature_cols = st.columns(4)
         for index, feature_name in enumerate(selected_features):
             feature_cols[index % len(feature_cols)].markdown(f"- `{feature_name}`")
@@ -710,50 +862,53 @@ def render_experiment_page(
     st.subheader("Experiment")
     render_public_bundle_note(experiment_manifest)
 
-    summary_rows = [
-        {
-            "Item": "Experiment bundle",
-            "Current value": experiment_manifest.get("experiment_id") or experiment_manifest.get("run_id") or "-",
-        },
-        {
-            "Item": "Target and horizon",
-            "Current value": (
-                f"{str(champion.get('target', experiment_manifest.get('target', 'upt'))).upper()}, "
-                f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', 3))} months ahead"
+    summary_items = [
+        ("Experiment bundle", experiment_manifest.get("experiment_id") or experiment_manifest.get("run_id") or "-"),
+        (
+            "Target / horizon",
+            (
+                f"{str(champion.get('target', experiment_manifest.get('target', 'upt'))).upper()}"
+                f" / {manifest_value(experiment_manifest, 'horizon', champion.get('horizon', 3))} months"
             ),
-        },
-        {
-            "Item": "As-of window",
-            "Current value": date_range_label(forecast_paths, "as_of_date"),
-        },
-        {
-            "Item": "Target window",
-            "Current value": date_range_label(forecast_paths, "target_date"),
-        },
-        {
-            "Item": "Model configurations",
-            "Current value": format_int(len(leaderboard)),
-        },
-        {
-            "Item": "Rolling predictions",
-            "Current value": format_int(len(forecast_paths)),
-        },
-        {
-            "Item": "Metric rows",
-            "Current value": format_int(len(performance)),
-        },
+        ),
+        ("As-of window", date_range_label(forecast_paths, "as_of_date")),
+        ("Target window", date_range_label(forecast_paths, "target_date")),
+        ("Model configurations", format_int(len(leaderboard))),
+        ("Rolling predictions", format_int(len(forecast_paths))),
+        ("Metric rows", format_int(len(performance))),
     ]
-    st.markdown("### Loaded Experiment Summary")
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
     model_scope = (
         leaderboard.groupby(["model_family", "model_build"], dropna=False)
         .size()
         .reset_index(name="configurations")
     )
     model_scope = model_taxonomy_sort(model_scope)
-    st.markdown("### Model Scope In This Bundle")
-    st.dataframe(model_scope, use_container_width=True, hide_index=True)
+
+    summary_cols = st.columns(2)
+    summary_cols[0].markdown(
+        """
+        <div class="champion-summary">
+            <div class="summary-title">Loaded Experiment Summary</div>
+            <div class="champion-summary-grid">
+        """
+        + "".join(champion_summary_item(label, value) for label, value in summary_items)
+        + """
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    summary_cols[1].markdown(
+        """
+        <div class="champion-summary">
+            <div class="summary-title">Model Scope In This Bundle</div>
+        """
+        + model_scope_summary_html(model_scope)
+        + """
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Feature Policies")
     st.write(
@@ -835,7 +990,7 @@ def render_experiment_page(
     else:
         st.warning(f"Could not find `{PHASE_C_MONTHLY_CONFIG_PATH}`.")
 
-    st.markdown(EXPERIMENT_OVERVIEW)
+    st.markdown(experiment_overview_with_regime_note())
 
 
 @st.cache_data(show_spinner=False)
@@ -1171,6 +1326,7 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
             mode="lines+markers",
             name="Actual",
             line=dict(width=3),
+            opacity=1,
         )
     )
     fig.add_trace(
@@ -1179,6 +1335,8 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
             y=df["prediction"],
             mode="lines+markers",
             name="Prediction",
+            line=dict(width=2),
+            opacity=0.62,
         )
     )
     if "seasonal_naive_prediction" in df:
@@ -1189,9 +1347,11 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
                 mode="lines",
                 name="Seasonal naive",
                 line=dict(dash="dash"),
+                opacity=1,
             )
         )
     fig.update_layout(
+        template="plotly_white",
         title=title,
         xaxis_title="Target month",
         yaxis_title="UPT",
@@ -1206,6 +1366,9 @@ def line_forecast_chart(df: pd.DataFrame, title: str) -> go.Figure:
         ),
         margin=dict(l=10, r=10, t=50, b=145),
         height=560,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#2f323a"),
     )
     fig.update_xaxes(title_standoff=28)
     return fig
@@ -1385,6 +1548,7 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
             mode="lines+markers",
             name="Actual",
             line=dict(width=4, color="#111827"),
+            opacity=1,
         )
     )
 
@@ -1401,6 +1565,7 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
                 mode="lines",
                 name="Seasonal naive",
                 line=dict(dash="dash", color="#f97316"),
+                opacity=1,
             )
         )
 
@@ -1416,10 +1581,13 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
                 y=group["prediction"],
                 mode="lines+markers",
                 name=label,
+                line=dict(width=2),
+                opacity=0.58,
             )
         )
 
     fig.update_layout(
+        template="plotly_white",
         title=title,
         xaxis_title="Target month",
         yaxis_title="UPT",
@@ -1434,6 +1602,9 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
         ),
         margin=dict(l=10, r=10, t=50, b=190),
         height=650,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#2f323a"),
     )
     fig.update_xaxes(title_standoff=32)
     return fig
@@ -1904,23 +2075,13 @@ def main() -> None:
         tab_data,
         tab_experiment,
         tab_modeling_overview,
-        tab_forecast,
-        tab_performance,
-        tab_metric_mapping,
-        tab_features,
-        tab_ops,
     ) = st.tabs(
         [
             "Project Overview",
             "System",
             "Data",
             "Experiment",
-            "Modeling Overview",
-            "Forecast Explorer",
-            "Model Performance",
-            "Metric Mapping",
-            "Feature Strategy",
-            "Operational Footprint",
+            "Model Explorer",
         ]
     )
 
@@ -1966,6 +2127,7 @@ def main() -> None:
         )
 
     with tab_modeling_overview:
+        render_champion_snapshot(champion, forecast_paths, experiment_manifest)
         st.subheader("Top Models Against Actual Ridership")
         filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
         selected_model_families = optional_multiselect(
@@ -2099,395 +2261,6 @@ def main() -> None:
         with st.expander("How period-specific metrics are interpreted"):
             st.markdown(PERIOD_METRIC_EXPLANATION)
 
-    with tab_forecast:
-        st.subheader("Forecast Explorer")
-        filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
-        model_families = optional_multiselect(
-            "Model families",
-            candidate_leaderboard["model_family"],
-            key="forecast_model_families",
-            container=filter_cols[0],
-            order=MODEL_FAMILY_ORDER,
-        )
-        family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", model_families)
-        model_builds = optional_multiselect(
-            "Model builds",
-            family_scope["model_build"],
-            key="forecast_model_builds",
-            container=filter_cols[1],
-            order=MODEL_BUILD_ORDER,
-        )
-        build_scope = apply_optional_multi_filter(family_scope, "model_build", model_builds)
-        mode = all_selectbox(
-            "Mode",
-            build_scope["mode"],
-            "forecast_mode",
-            filter_cols[2],
-        )
-        mode_scope = apply_optional_filter(build_scope, "mode", mode)
-        forecast_rank_label = filter_cols[3].selectbox(
-            "Rank by",
-            available_rank_options(leaderboard),
-            key="forecast_metric",
-        )
-        filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
-        feature_families = optional_multiselect(
-            "Feature families",
-            mode_scope["feature_family_name"],
-            key="forecast_feature_families",
-            container=filter_cols_secondary[0],
-        )
-        feature_scope = apply_optional_multi_filter(mode_scope, "feature_family_name", feature_families)
-        feature_policies = optional_multiselect(
-            "Feature policies",
-            feature_scope["feature_policy"],
-            key="forecast_feature_policies",
-            container=filter_cols_secondary[1],
-        )
-        forecast_per_build_limit = filter_cols_secondary[2].selectbox(
-            "Configs per build",
-            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
-            index=0,
-            key="forecast_per_build_limit",
-        )
-        forecast_path_mode = filter_cols_secondary[3].selectbox(
-            "Path mode",
-            ["Each configuration", "Average by model build"],
-            key="forecast_path_mode",
-        )
-        ranked_candidates = filtered_frame(
-            candidate_leaderboard,
-            model_family=model_families,
-            model_build=model_builds,
-            mode=mode,
-            feature_family=feature_families,
-            feature_policy=feature_policies,
-        )
-        ranked_candidates = sort_by_rank_metric(ranked_candidates, forecast_rank_label)
-        ranked_candidates = limit_configs_per_build(
-            ranked_candidates,
-            forecast_rank_label,
-            forecast_per_build_limit,
-        )
-        if ranked_candidates.empty:
-            st.info("No model configurations match the selected filters.")
-        elif forecast_path_mode == "Average by model build":
-            st.markdown("**Top matching ranked models**")
-            st.dataframe(
-                forecast_ranked_table(ranked_candidates.head(50)),
-                hide_index=True,
-                use_container_width=True,
-            )
-            average_candidates = forecast_paths[
-                forecast_paths["config_id"].isin(ranked_candidates["config_id"])
-            ].copy()
-            date_cols = st.columns([1, 1, 1, 1, 1])
-            as_of_min, as_of_max = date_bounds(average_candidates, "as_of_date")
-            target_min, target_max = date_bounds(average_candidates, "target_date")
-            forecast_as_of_start = date_cols[0].date_input(
-                "As-of start",
-                as_of_min.date(),
-                min_value=as_of_min.date(),
-                max_value=as_of_max.date(),
-                key="forecast_avg_as_of_start",
-            )
-            forecast_as_of_end = date_cols[1].date_input(
-                "As-of end",
-                as_of_max.date(),
-                min_value=as_of_min.date(),
-                max_value=as_of_max.date(),
-                key="forecast_avg_as_of_end",
-            )
-            forecast_target_start = date_cols[2].date_input(
-                "Target start",
-                target_min.date(),
-                min_value=target_min.date(),
-                max_value=target_max.date(),
-                key="forecast_avg_target_start",
-            )
-            forecast_target_end = date_cols[3].date_input(
-                "Target end",
-                target_max.date(),
-                min_value=target_min.date(),
-                max_value=target_max.date(),
-                key="forecast_avg_target_end",
-            )
-            average_candidates = apply_date_window(
-                average_candidates,
-                "as_of_date",
-                forecast_as_of_start,
-                forecast_as_of_end,
-            )
-            average_candidates = apply_date_window(
-                average_candidates,
-                "target_date",
-                forecast_target_start,
-                forecast_target_end,
-            )
-            averaged_paths = average_forecast_paths_by_build(average_candidates, ranked_candidates)
-            st.plotly_chart(
-                top_model_chart(averaged_paths, "Average Forecast vs Actual by Model Build"),
-                use_container_width=True,
-            )
-        else:
-            selected_labels = [
-                ranked_model_label(row, forecast_rank_label)
-                for _, row in ranked_candidates.iterrows()
-            ]
-            label_by_config = dict(zip(ranked_candidates["config_id"], selected_labels))
-            default_config = (
-                champion.get("config_id")
-                if champion.get("config_id") in label_by_config
-                else ranked_candidates.iloc[0]["config_id"]
-            )
-            selected_label = st.selectbox(
-                "Selected ranked model",
-                selected_labels,
-                index=selected_labels.index(label_by_config[default_config]),
-                key="forecast_ranked_model",
-            )
-            label_to_config = dict(zip(selected_labels, ranked_candidates["config_id"]))
-            config_id = label_to_config[selected_label]
-            selected_model = ranked_candidates[ranked_candidates["config_id"] == config_id].iloc[0]
-            st.caption(
-                "Hyperparameters: "
-                f"{parse_json_display(selected_model.get('hyperparameters_json', '{}'))}. "
-                f"Ranked by {forecast_rank_label.lower()} within the active filters."
-            )
-
-            st.markdown("**Top matching ranked models**")
-            st.dataframe(
-                forecast_ranked_table(ranked_candidates.head(10)),
-                hide_index=True,
-                use_container_width=True,
-            )
-
-            candidates = forecast_paths[forecast_paths["config_id"] == config_id].copy()
-            date_cols = st.columns([1, 1, 1, 1, 1])
-            as_of_min, as_of_max = date_bounds(candidates, "as_of_date")
-            target_min, target_max = date_bounds(candidates, "target_date")
-            forecast_as_of_start = date_cols[0].date_input(
-                "As-of start",
-                as_of_min.date(),
-                min_value=as_of_min.date(),
-                max_value=as_of_max.date(),
-                key="forecast_as_of_start",
-            )
-            forecast_as_of_end = date_cols[1].date_input(
-                "As-of end",
-                as_of_max.date(),
-                min_value=as_of_min.date(),
-                max_value=as_of_max.date(),
-                key="forecast_as_of_end",
-            )
-            forecast_target_start = date_cols[2].date_input(
-                "Target start",
-                target_min.date(),
-                min_value=target_min.date(),
-                max_value=target_max.date(),
-                key="forecast_target_start",
-            )
-            forecast_target_end = date_cols[3].date_input(
-                "Target end",
-                target_max.date(),
-                min_value=target_min.date(),
-                max_value=target_max.date(),
-                key="forecast_target_end",
-            )
-            selected_forecast = candidates.sort_values("target_date")
-            selected_forecast = apply_date_window(
-                selected_forecast,
-                "as_of_date",
-                forecast_as_of_start,
-                forecast_as_of_end,
-            )
-            selected_forecast = apply_date_window(
-                selected_forecast,
-                "target_date",
-                forecast_target_start,
-                forecast_target_end,
-            )
-            st.plotly_chart(
-                line_forecast_chart(selected_forecast, "Selected Forecast vs Actual"),
-                use_container_width=True,
-            )
-            st.dataframe(
-                selected_forecast[
-                    [
-                        "as_of_date",
-                        "target_date",
-                        "actual",
-                        "prediction",
-                        "seasonal_naive_prediction",
-                        "error",
-                        "abs_error",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with tab_performance:
-        st.subheader("Model Leaderboard")
-        perf_filter_cols = st.columns([1.2, 1.8, 1.0, 1.0])
-        perf_model_families = optional_multiselect(
-            "Model families",
-            candidate_leaderboard["model_family"],
-            "performance_model_families",
-            perf_filter_cols[0],
-            MODEL_FAMILY_ORDER,
-        )
-        perf_family_scope = apply_optional_multi_filter(candidate_leaderboard, "model_family", perf_model_families)
-        perf_model_builds = optional_multiselect(
-            "Model builds",
-            perf_family_scope["model_build"],
-            "performance_model_builds",
-            perf_filter_cols[1],
-            MODEL_BUILD_ORDER,
-        )
-        perf_build_scope = apply_optional_multi_filter(perf_family_scope, "model_build", perf_model_builds)
-        perf_mode = all_selectbox("Mode", perf_build_scope["mode"], "performance_mode", perf_filter_cols[2])
-        perf_mode_scope = apply_optional_filter(perf_build_scope, "mode", perf_mode)
-        perf_rank_label = perf_filter_cols[3].selectbox(
-            "Rank by",
-            available_rank_options(leaderboard),
-            key="performance_metric",
-        )
-        perf_filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
-        perf_feature_families = optional_multiselect(
-            "Feature families",
-            perf_mode_scope["feature_family_name"],
-            "performance_feature_families",
-            perf_filter_cols_secondary[0],
-        )
-        perf_feature_scope = apply_optional_multi_filter(
-            perf_mode_scope,
-            "feature_family_name",
-            perf_feature_families,
-        )
-        perf_feature_policies = optional_multiselect(
-            "Feature policies",
-            perf_feature_scope["feature_policy"],
-            "performance_feature_policies",
-            perf_filter_cols_secondary[1],
-        )
-        perf_per_build_limit = perf_filter_cols_secondary[2].selectbox(
-            "Configs per build",
-            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
-            index=0,
-            key="performance_per_build_limit",
-        )
-        perf_path_mode = perf_filter_cols_secondary[3].selectbox(
-            "Path mode",
-            ["Each configuration", "Average by model build"],
-            key="performance_path_mode",
-        )
-        filtered_leaderboard = filtered_frame(
-            candidate_leaderboard,
-            model_family=perf_model_families,
-            model_build=perf_model_builds,
-            mode=perf_mode,
-            feature_family=perf_feature_families,
-            feature_policy=perf_feature_policies,
-        )
-        filtered_leaderboard = sort_by_rank_metric(filtered_leaderboard, perf_rank_label)
-        filtered_leaderboard = limit_configs_per_build(
-            filtered_leaderboard,
-            perf_rank_label,
-            perf_per_build_limit,
-        )
-
-        display_cols = [
-            "rank",
-            "model_family",
-            "model_build",
-            "mode",
-            "feature_policy",
-            "feature_family_name",
-            "n_features",
-            "mae",
-            "rmse",
-            "r2",
-            "r2_adjusted",
-            "diracc",
-            "selection_score",
-            "selection_score_typical",
-            "selection_score_balanced",
-            "selection_score_large_error",
-            "pre_covid_mae",
-            "pre_covid_rmse",
-            "covid_shock_mae",
-            "covid_shock_rmse",
-            "recovery_mae",
-            "recovery_rmse",
-            "recent_mae",
-            "recent_rmse",
-            "shock_penalty",
-            "rmse_shock_penalty",
-            "recovery_ratio",
-            "rmse_recovery_ratio",
-            "recent_recovery_ratio",
-            "rmse_recent_recovery_ratio",
-        ]
-        available_cols = [column for column in display_cols if column in leaderboard.columns]
-        st.dataframe(filtered_leaderboard[available_cols].head(50), use_container_width=True, hide_index=True)
-
-        period_cols = [
-            "rank",
-            "model_family",
-            "model_build",
-            "mode",
-            "feature_policy",
-            "feature_family_name",
-            "selection_score",
-            "selection_score_typical",
-            "selection_score_balanced",
-            "selection_score_large_error",
-            "pre_covid_mae",
-            "pre_covid_rmse",
-            "pre_covid_selection_score_typical",
-            "pre_covid_selection_score_balanced",
-            "pre_covid_selection_score_large_error",
-            "covid_shock_mae",
-            "covid_shock_rmse",
-            "covid_shock_selection_score_typical",
-            "covid_shock_selection_score_balanced",
-            "covid_shock_selection_score_large_error",
-            "recovery_mae",
-            "recovery_rmse",
-            "recovery_selection_score_typical",
-            "recovery_selection_score_balanced",
-            "recovery_selection_score_large_error",
-            "recent_mae",
-            "recent_rmse",
-            "recent_selection_score_typical",
-            "recent_selection_score_balanced",
-            "recent_selection_score_large_error",
-            "shock_penalty",
-            "rmse_shock_penalty",
-            "typical_score_shock_penalty",
-            "balanced_score_shock_penalty",
-            "large_error_score_shock_penalty",
-            "recovery_ratio",
-            "rmse_recovery_ratio",
-            "typical_score_recovery_ratio",
-            "balanced_score_recovery_ratio",
-            "large_error_score_recovery_ratio",
-            "recent_recovery_ratio",
-            "rmse_recent_recovery_ratio",
-            "typical_score_recent_recovery_ratio",
-            "balanced_score_recent_recovery_ratio",
-            "large_error_score_recent_recovery_ratio",
-        ]
-        available_period_cols = [column for column in period_cols if column in filtered_leaderboard.columns]
-        if len(available_period_cols) > 6:
-            st.markdown("**Period Metrics**")
-            st.dataframe(
-                filtered_leaderboard[available_period_cols].head(50),
-                use_container_width=True,
-                hide_index=True,
-            )
-
         with st.expander("Period metrics and derived ratios"):
             st.markdown(PERIOD_METRIC_SHORT_EXPLANATION)
 
@@ -2495,70 +2268,130 @@ def main() -> None:
             st.markdown(REPRESENTATION_AND_COMPLEXITY_EXPLANATION)
 
         st.subheader("Rolling Error Over Time")
-        perf_date_cols = st.columns([1, 1, 2])
-        perf_as_of_min, perf_as_of_max = date_bounds(performance, "as_of_date")
-        perf_as_of_start = perf_date_cols[0].date_input(
+        rolling_date_cols = st.columns([1, 1, 2])
+        overview_as_of_min, overview_as_of_max = date_bounds(performance, "as_of_date")
+        overview_as_of_start = rolling_date_cols[0].date_input(
             "As-of start",
-            perf_as_of_min.date(),
-            min_value=perf_as_of_min.date(),
-            max_value=perf_as_of_max.date(),
-            key="performance_as_of_start",
+            overview_as_of_min.date(),
+            min_value=overview_as_of_min.date(),
+            max_value=overview_as_of_max.date(),
+            key="overview_rolling_as_of_start",
         )
-        perf_as_of_end = perf_date_cols[1].date_input(
+        overview_as_of_end = rolling_date_cols[1].date_input(
             "As-of end",
-            perf_as_of_max.date(),
-            min_value=perf_as_of_min.date(),
-            max_value=perf_as_of_max.date(),
-            key="performance_as_of_end",
+            overview_as_of_max.date(),
+            min_value=overview_as_of_min.date(),
+            max_value=overview_as_of_max.date(),
+            key="overview_rolling_as_of_end",
         )
-        top_configs = filtered_leaderboard["config_id"].tolist()
-        rolling_subset = performance[performance["config_id"].isin(top_configs)].copy()
+        rolling_configs = filtered_top["config_id"].tolist()
+        rolling_subset = performance[performance["config_id"].isin(rolling_configs)].copy()
         rolling_subset = apply_date_window(
             rolling_subset,
             "as_of_date",
-            perf_as_of_start,
-            perf_as_of_end,
+            overview_as_of_start,
+            overview_as_of_end,
         )
-        if perf_path_mode == "Average by model build":
-            rolling_subset = average_performance_by_build(rolling_subset, filtered_leaderboard)
+        if overview_path_mode == "Average by model build":
+            rolling_subset = average_performance_by_build(rolling_subset, filtered_top)
         else:
             rolling_subset = rolling_subset[
-                rolling_subset["config_id"].isin(filtered_leaderboard.head(12)["config_id"])
+                rolling_subset["config_id"].isin(filtered_top.head(12)["config_id"])
             ].copy()
         st.plotly_chart(rolling_error_chart(rolling_subset), use_container_width=True)
 
         st.subheader("Model Build Comparison")
-        comparison_metric = RANK_METRIC_OPTIONS[perf_rank_label][0]
-        comparison_ascending = RANK_METRIC_OPTIONS[perf_rank_label][1]
+        comparison_metric = RANK_METRIC_OPTIONS[metric_label][0]
+        comparison_ascending = RANK_METRIC_OPTIONS[metric_label][1]
         comparison_agg = "min" if comparison_ascending else "max"
-        model_summary = (
-            filtered_leaderboard.groupby(["model_family", "model_build"], as_index=False)
-            .agg(
-                best_mae=("mae", "min"),
-                best_rmse=("rmse", "min"),
-                best_metric=(comparison_metric, comparison_agg),
+        if comparison_metric in filtered_top.columns and not filtered_top.empty:
+            model_summary = (
+                filtered_top.groupby(["model_family", "model_build"], as_index=False)
+                .agg(
+                    best_mae=("mae", "min"),
+                    best_rmse=("rmse", "min"),
+                    best_metric=(comparison_metric, comparison_agg),
+                )
+                .sort_values("best_metric", ascending=comparison_ascending)
             )
-            .sort_values("best_metric", ascending=comparison_ascending)
-        )
-        fig = px.bar(
-            model_summary,
-            x="model_build",
-            y="best_metric",
-            color="model_family",
-            category_orders={
-                "model_family": MODEL_FAMILY_ORDER,
-                "model_build": MODEL_BUILD_ORDER,
-            },
-            labels={
-                "model_build": "Model build",
-                "model_family": "Model family",
-                "best_metric": f"Best {perf_rank_label}",
-            },
-        )
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+            fig = px.bar(
+                model_summary,
+                x="model_build",
+                y="best_metric",
+                color="model_family",
+                category_orders={
+                    "model_family": MODEL_FAMILY_ORDER,
+                    "model_build": MODEL_BUILD_ORDER,
+                },
+                labels={
+                    "model_build": "Model build",
+                    "model_family": "Model family",
+                    "best_metric": f"Best {metric_label}",
+                },
+            )
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=30, b=10),
+                template="plotly_white",
+                paper_bgcolor="#ffffff",
+                plot_bgcolor="#ffffff",
+                font=dict(color="#2f323a"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    with tab_metric_mapping:
+        st.markdown("### Selected Model Forecast Rows")
+        detail_candidates = filtered_top.copy().reset_index(drop=True)
+        if detail_candidates.empty:
+            st.info("No model configurations are available for the selected Model Explorer filters.")
+        else:
+            detail_candidates["rank"] = range(1, len(detail_candidates) + 1)
+            detail_labels = [
+                ranked_model_label(row, metric_label)
+                for _, row in detail_candidates.iterrows()
+            ]
+            detail_label_by_config = dict(zip(detail_candidates["config_id"], detail_labels))
+            default_detail_config = (
+                selected_models.iloc[0]["config_id"]
+                if not selected_models.empty and selected_models.iloc[0].get("config_id") in detail_label_by_config
+                else detail_candidates.iloc[0]["config_id"]
+            )
+            selected_detail_label = st.selectbox(
+                "Model for forecast-row table",
+                detail_labels,
+                index=detail_labels.index(detail_label_by_config[default_detail_config]),
+                key="overview_detail_model",
+            )
+            detail_config_id = dict(zip(detail_labels, detail_candidates["config_id"]))[selected_detail_label]
+            detail_model = detail_candidates[detail_candidates["config_id"] == detail_config_id].iloc[0]
+            st.caption(
+                "Hyperparameters: "
+                f"{parse_json_display(detail_model.get('hyperparameters_json', '{}'))}. "
+                f"Table follows the selected model over the active target-date window."
+            )
+            detail_forecast = forecast_paths[forecast_paths["config_id"] == detail_config_id].copy()
+            detail_forecast = detail_forecast.sort_values("target_date")
+            detail_forecast = apply_date_window(
+                detail_forecast,
+                "target_date",
+                overview_target_start,
+                overview_target_end,
+            )
+            detail_columns = [
+                "as_of_date",
+                "target_date",
+                "actual",
+                "prediction",
+                "seasonal_naive_prediction",
+                "error",
+                "abs_error",
+                "evaluation_period",
+            ]
+            detail_columns = [column for column in detail_columns if column in detail_forecast.columns]
+            st.dataframe(
+                detail_forecast[detail_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+
         st.subheader("Metric Mapping")
         st.write(
             "Map model configurations across two evaluation metrics to inspect tradeoffs, "
@@ -2698,28 +2531,6 @@ def main() -> None:
                 hide_index=True,
             )
 
-    with tab_features:
-        st.subheader("Feature Family Ranking")
-        family_display = family_summary.sort_values("best_selection_score").copy()
-        st.dataframe(family_display.head(20), use_container_width=True, hide_index=True)
-
-        fig = px.bar(
-            family_display.head(14),
-            x="best_selection_score",
-            y="feature_family_name",
-            color="mode",
-            orientation="h",
-            labels={
-                "best_selection_score": "Best balanced score (lower is better)",
-                "feature_family_name": "Feature family",
-                "mode": "Mode",
-            },
-        )
-        fig.update_yaxes(autorange="reversed")
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab_ops:
         st.subheader("Operational Footprint")
         if {"model_type", "total_train_seconds", "avg_train_seconds"}.issubset(leaderboard.columns):
             runtime = (
@@ -2739,13 +2550,19 @@ def main() -> None:
                 color="model_type",
                 labels={"model_type": "Model type", "total_train_seconds": "Total train seconds"},
             )
-            fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=30, b=10))
+            fig.update_layout(
+                showlegend=False,
+                margin=dict(l=10, r=10, t=30, b=10),
+                template="plotly_white",
+                paper_bgcolor="#ffffff",
+                plot_bgcolor="#ffffff",
+                font=dict(color="#2f323a"),
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("Loaded Artifacts")
+        st.markdown("**Loaded Artifacts**")
         st.code(str(selected_dir), language="text")
         st.write("This app reads curated dashboard artifacts only. It does not trigger training jobs.")
-
 
 if __name__ == "__main__":
     main()

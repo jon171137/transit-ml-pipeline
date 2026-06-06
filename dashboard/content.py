@@ -142,6 +142,26 @@ DATA_TIME_FEATURES = """
 """
 
 
+DATA_AS_OF_REGIME_FEATURES = """
+### As-Of Safe Regime Features
+
+- Regime labels are useful, but they must not give the model information from
+  the future.
+- Pre-COVID forecasts should not receive a countdown-style feature such as
+  "months until COVID"; that would leak the future shock into the training
+  process.
+- The cleaner design is adaptive: before a disruption is observable, regime
+  features are neutral. After the disruption is known, parallel experiments can
+  compare models with and without explicit shock/recovery features.
+- Evaluation-period labels can still be used after the fact to compare
+  pre-COVID, shock, recovery, and recent performance. Those labels are
+  analytical metadata, not necessarily deployable model inputs.
+- The next rerun will separate these ideas more carefully so regime-aware
+  models measure whether known disruption context helps recovery forecasting,
+  not whether a model benefited from hindsight.
+"""
+
+
 EXPERIMENT_OVERVIEW = """
 ### Forecasting Setup
 
