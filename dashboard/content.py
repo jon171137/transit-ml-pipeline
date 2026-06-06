@@ -1,7 +1,6 @@
 PROJECT_OVERVIEW_CASE_STUDY = """
 ### What This Project Is
 
-- Forecasting lab built around monthly transit ridership and service data.
 - Uses transit ridership as a compact case study with seasonality, trend,
   operational context, economic context, and a major structural break.
 - Studies how model behavior changes across ordinary periods, COVID shock,
@@ -17,8 +16,6 @@ PROJECT_OVERVIEW_SYSTEM = """
 - Builds a monthly integrated feature table and feature-family definitions.
 - Trains models across repeated historical as-of dates.
 - Publishes curated Parquet/JSON artifacts for dashboard exploration.
-- Uses AWS for production-shaped orchestration and local/GPU runs for broader
-  experimentation.
 """
 
 
@@ -27,27 +24,19 @@ PROJECT_OVERVIEW = """
 ### What The Experiment Simulates
 
 Each as-of month acts like a historical checkpoint. The model can train only on
-data available before that month, then it forecasts three months ahead. Repeating
-that process over time creates a synthetic deployment history: not just one
-train/test split, but a rolling view of how each strategy would have performed
-as the world changed.
+data available before that month, then it forecasts three months ahead.
 
-The dashboard compares model families, feature families, feature policies, and
-raw-vs-residual approaches across that rolling history. The period-specific
-metrics separate ordinary pre-COVID behavior from the shock, recovery, and more
-recent operating regime.
+Repeating that process over time creates a synthetic deployment history: not
+just one train/test split, but a rolling view of how each strategy would have
+performed.
 
 ### Current Scope
 
-The current artifacts come from a larger local A/B/C experiment. Phase A covers
-baseline, regularized linear, bagging-style tree, randomized tree, and boosted
-tree models across income-aware feature families and model-specific feature
-policies. Phase B adds ARIMA, SARIMA, and SARIMAX configurations using compact
-service, economic, income-pressure, and service-economic exogenous sets.
+The experimentation has currently covered a range of modeling approaches.
 
-Phase C adds GPU-trained GRU and LSTM sequence models. The dashboard now reads a
-combined DuckDB-derived export that includes baseline, linear, tree,
-autoregressive, and neural-net model families under one artifact contract.
+The dashboard now reads a combined DuckDB-derived export that includes baseline,
+linear, tree, autoregressive, and neural-net model families under one artifact
+contract.
 """
 
 
