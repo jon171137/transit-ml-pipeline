@@ -59,7 +59,16 @@ INCOME_FEATURE_COLS = [
     "king_county_income_2yr_pct_prior_year",
 ]
 
-REGIME_INTERACTION_FLAGS = ["is_covid_disruption", "is_post_covid"]
+PANDEMIC_EVENT_ID = "covid_2020"
+PANDEMIC_OBSERVED_START = pd.Timestamp("2020-03-01")
+PANDEMIC_POST_DISRUPTION_START = pd.Timestamp("2021-03-01")
+PANDEMIC_REGIME_FEATURES = [
+    "pandemic_observed",
+    "pandemic_disruption_active",
+    "post_pandemic_observed",
+    "months_since_pandemic_observed",
+]
+REGIME_INTERACTION_FLAGS = ["pandemic_disruption_active", "post_pandemic_observed"]
 
 INTERACTION_FEATURE_GROUPS = {
     "history_regime_interactions": [
@@ -324,18 +333,23 @@ def add_time_and_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     df["month_sin"] = np.sin(2 * np.pi * df["month_num"] / 12)
     df["month_cos"] = np.cos(2 * np.pi * df["month_num"] / 12)
 
-    covid_start = pd.Timestamp("2020-03-01")
-    post_covid_start = pd.Timestamp("2021-03-01")
-
-    df["is_covid_disruption"] = (
-        (df["date"] >= covid_start) & (df["date"] < post_covid_start)
+    df["pandemic_observed"] = (df["date"] >= PANDEMIC_OBSERVED_START).astype(int)
+    df["pandemic_disruption_active"] = (
+        (df["date"] >= PANDEMIC_OBSERVED_START) & (df["date"] < PANDEMIC_POST_DISRUPTION_START)
     ).astype(int)
-    df["is_post_covid"] = (df["date"] >= post_covid_start).astype(int)
-    df["months_since_covid_impact"] = np.where(
-        df["date"] >= covid_start,
-        (df["date"].dt.year - covid_start.year) * 12 + (df["date"].dt.month - covid_start.month),
+    df["post_pandemic_observed"] = (df["date"] >= PANDEMIC_POST_DISRUPTION_START).astype(int)
+    df["months_since_pandemic_observed"] = np.where(
+        df["date"] >= PANDEMIC_OBSERVED_START,
+        (df["date"].dt.year - PANDEMIC_OBSERVED_START.year) * 12
+        + (df["date"].dt.month - PANDEMIC_OBSERVED_START.month),
         0,
     )
+
+    # Backward-compatible aliases for prior artifacts/notebooks. New feature
+    # families should use the generalized pandemic_* columns above.
+    df["is_covid_disruption"] = df["pandemic_disruption_active"]
+    df["is_post_covid"] = df["post_pandemic_observed"]
+    df["months_since_covid_impact"] = df["months_since_pandemic_observed"]
 
     return df
 
@@ -512,7 +526,7 @@ def build_feature_families(horizon: int) -> dict[str, list[str]]:
         "history_rolls": ["upt_rollmean_3", "upt_rollstd_3", "upt_rollmean_6", "upt_rollstd_6"],
         "history_yoy": ["upt_yoy_diff"],
         "seasonality": ["month_sin", "month_cos", f"target_month_sin_h{horizon}", f"target_month_cos_h{horizon}"],
-        "regime": ["is_covid_disruption", "is_post_covid", "months_since_covid_impact"],
+        "regime": PANDEMIC_REGIME_FEATURES,
         "time_trend": ["time_index_months"],
         "gas": [
             "seattle_gas_price_avg_lag1",
@@ -927,6 +941,20 @@ def main() -> int:
         "optional_model_base_columns": available_optional_cols,
         "core_observed_columns": CORE_OBSERVED_COLS,
         "exogenous_imputed_columns": EXOGENOUS_COLS,
+        "regime_event": {
+            "event_id": PANDEMIC_EVENT_ID,
+            "model_feature_prefix": "pandemic",
+            "observed_start": PANDEMIC_OBSERVED_START.date().isoformat(),
+            "post_disruption_start": PANDEMIC_POST_DISRUPTION_START.date().isoformat(),
+            "feature_columns": PANDEMIC_REGIME_FEATURES,
+            "interaction_flags": REGIME_INTERACTION_FLAGS,
+            "pre_observed_behavior": "neutral_zero",
+            "legacy_aliases": {
+                "is_covid_disruption": "pandemic_disruption_active",
+                "is_post_covid": "post_pandemic_observed",
+                "months_since_covid_impact": "months_since_pandemic_observed",
+            },
+        },
         "null_counts_before_trim": null_counts_before,
         "null_counts_after_trim": null_counts_after_trim,
         "null_counts_after_imputation": null_counts_after_imputation,

@@ -35,8 +35,9 @@ performed.
 The experimentation has currently covered a range of modeling approaches.
 
 The dashboard now reads a combined DuckDB-derived export that includes baseline,
-linear, tree, autoregressive, and neural-net model families under one artifact
-contract.
+linear, tree, and autoregressive model families under one artifact contract.
+Neural-net artifacts are being handled as the next experiment block and will fit
+the same export structure once rerun against the pandemic-safe feature table.
 """
 
 
@@ -109,7 +110,7 @@ DATA_SECONDARY_EDA = """
 DATA_CALCULATED_FEATURES = """
 ### Calculated Features
 
-- Feature table includes lags, rolling summaries, regime flags, exogenous
+- Feature table includes lags, rolling summaries, adaptive regime flags, exogenous
   signals, income pressure indicators, and targeted interaction terms.
 - Income-aware families include `history_regime_income`,
   `history_regime_income_pressure`, and
@@ -123,7 +124,7 @@ DATA_TIME_FEATURES = """
 ### Time-Based Features
 
 - Time features represent month-of-year seasonality, long-run trend,
-  target-month context, and COVID/recovery regimes.
+  target-month context, and observed disruption/recovery regimes.
 - They support raw/direct forecasts and residual models built around a seasonal
   naive baseline.
 - Autoregressive and neural sequence models use the same rolling as-of frame,
@@ -136,12 +137,16 @@ DATA_AS_OF_REGIME_FEATURES = """
 
 - Regime labels are useful, but they must not give the model information from
   the future.
-- Pre-COVID forecasts should not receive a countdown-style feature such as
-  "months until COVID"; that would leak the future shock into the training
+- Pre-disruption forecasts should not receive a countdown-style feature such as
+  "months until pandemic"; that would leak the future shock into the training
   process.
-- The cleaner design is adaptive: before a disruption is observable, regime
-  features are neutral. After the disruption is known, parallel experiments can
-  compare models with and without explicit shock/recovery features.
+- The cleaner design is adaptive: before a pandemic or comparable public-health
+  disruption is observable, regime features are neutral or absent. After the
+  disruption is known, parallel experiments can compare models with and without
+  explicit shock/recovery features.
+- Model-facing columns use generalized names such as `pandemic_observed` and
+  `months_since_pandemic_observed`; COVID-19 is the current event instance, not
+  the hard-coded modeling concept.
 - Evaluation-period labels can still be used after the fact to compare
   pre-COVID, shock, recovery, and recent performance. Those labels are
   analytical metadata, not necessarily deployable model inputs.

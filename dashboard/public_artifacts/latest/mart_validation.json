@@ -1,13 +1,13 @@
 {
-  "duckdb_path": "experiments_output/combined_phase_ab_v2_complexity/experiments.duckdb",
-  "results_dir": "experiments_output/combined_phase_ab_v2_complexity/results",
-  "dashboard_dir": "dashboard_artifacts/aws_streamlined/combined_phase_ab_v2_complexity",
-  "dashboard_export_dir": "dashboard_artifacts/aws_streamlined/combined_phase_ab_v2_complexity_from_duckdb",
+  "duckdb_path": "experiments_output/combined_phase_ab_v3_pandemic_safe/experiments.duckdb",
+  "results_dir": "experiments_output/combined_phase_ab_v3_pandemic_safe/results",
+  "dashboard_dir": "dashboard_artifacts/aws_streamlined/combined_phase_ab_v3_pandemic_safe",
+  "dashboard_export_dir": "dashboard_artifacts/aws_streamlined/combined_phase_ab_v3_pandemic_safe_from_duckdb",
   "table_counts": {
     "predictions": 1303200,
     "model_runs": 1303200,
     "metrics": 36200,
-    "feature_importance": 47334762,
+    "feature_importance": 47838608,
     "feature_sets": 352,
     "feature_family_summary": 49,
     "complexity_profile": 7240,

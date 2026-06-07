@@ -50,6 +50,7 @@ from run_aws_streamlined_models import (
     read_json_uri,
     read_chunk_result,
     read_parquet_uri,
+    regime_metadata_for_features,
     resolve_output_base_uri,
     safe_ape,
     select_champion,
@@ -529,6 +530,7 @@ def run_config(
         error = prediction - actual
         target_date = eval_row["target_date"]
         model_run_id = f"{run_config_id}__as_of_{as_of_date.date().isoformat()}"
+        regime_metadata = regime_metadata_for_features(selected_feature_cols, as_of_date)
         common = {
             "experiment_id": experiment_id,
             "pipeline_run_id": pipeline_run_id,
@@ -556,6 +558,7 @@ def run_config(
             "sequence_stride": 1,
             "prediction_head": "direct_horizon",
             "n_train": int(len(x_train)),
+            **regime_metadata,
         }
         predictions.append(
             {

@@ -133,6 +133,21 @@ VARIANCE_PRUNE_THRESHOLD = 1e-8
 MUTUAL_INFO_RANDOM_STATE = 42
 LASSO_SELECTOR_ALPHA = 10.0
 TREE_SELECTOR_RANDOM_STATE = 42
+REGIME_EVENT_ID = "covid_2020"
+REGIME_OBSERVED_START = pd.Timestamp("2020-03-01")
+REGIME_POLICY_NONE = "none"
+REGIME_POLICY_PANDEMIC_OBSERVED = "pandemic_observed"
+PANDEMIC_REGIME_FEATURES = {
+    "pandemic_observed",
+    "pandemic_disruption_active",
+    "post_pandemic_observed",
+    "months_since_pandemic_observed",
+}
+LEGACY_COVID_REGIME_FEATURES = {
+    "is_covid_disruption",
+    "is_post_covid",
+    "months_since_covid_impact",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -644,6 +659,45 @@ def is_shock_period(target_date) -> bool:
     return evaluation_period_for(target_date) == "covid_shock"
 
 
+def is_regime_feature(feature_name: str) -> bool:
+    lower = feature_name.lower()
+    return (
+        lower in PANDEMIC_REGIME_FEATURES
+        or lower in LEGACY_COVID_REGIME_FEATURES
+        or "pandemic_observed" in lower
+        or "pandemic_disruption_active" in lower
+        or "post_pandemic_observed" in lower
+        or "is_covid_disruption" in lower
+        or "is_post_covid" in lower
+        or "_x_pandemic_" in lower
+        or "_x_is_covid" in lower
+        or "_x_is_post_covid" in lower
+        or "months_since_pandemic_observed" in lower
+        or "months_since_covid_impact" in lower
+    )
+
+
+def regime_feature_names(feature_cols: list[str]) -> list[str]:
+    return sorted(col for col in feature_cols if is_regime_feature(col))
+
+
+def regime_metadata_for_features(feature_cols: list[str], as_of_date=None) -> dict:
+    feature_names = regime_feature_names(feature_cols)
+    uses_regime = bool(feature_names)
+    as_of_ts = pd.Timestamp(as_of_date) if as_of_date is not None else None
+    available_as_of = bool(uses_regime and as_of_ts is not None and as_of_ts >= REGIME_OBSERVED_START)
+    return {
+        "regime_policy": REGIME_POLICY_PANDEMIC_OBSERVED if uses_regime else REGIME_POLICY_NONE,
+        "regime_event_id": REGIME_EVENT_ID if uses_regime else "",
+        "regime_observed_start_date": (
+            REGIME_OBSERVED_START.date().isoformat() if uses_regime else ""
+        ),
+        "regime_features_available_as_of": available_as_of,
+        "uses_target_period_features": False,
+        "regime_feature_names_json": json.dumps(feature_names, sort_keys=True),
+    }
+
+
 def months_between(start_date, end_date) -> int:
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
@@ -1044,6 +1098,7 @@ def feature_set_row(
     feature_policy: str,
     feature_cols: list[str],
 ) -> dict:
+    regime_metadata = regime_metadata_for_features(feature_cols)
     return {
         "experiment_id": experiment_id,
         "feature_set_id": feature_set_id_value,
@@ -1067,6 +1122,12 @@ def feature_set_row(
         "includes_interactions": any(
             token in col.lower() for col in feature_cols for token in ["interact", "_x_"]
         ),
+        "includes_regime": regime_metadata["regime_policy"] != REGIME_POLICY_NONE,
+        "regime_policy": regime_metadata["regime_policy"],
+        "regime_event_id": regime_metadata["regime_event_id"],
+        "regime_observed_start_date": regime_metadata["regime_observed_start_date"],
+        "uses_target_period_features": regime_metadata["uses_target_period_features"],
+        "regime_feature_names_json": regime_metadata["regime_feature_names_json"],
     }
 
 
@@ -1178,6 +1239,7 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
         model_run_id = f"{run_config_id}__as_of_{as_of_date.date().isoformat()}"
         prediction_id = model_run_id
         model_refit = bool(model_type == "naive" or cached_train_date is None or cached_train_date == as_of_date)
+        regime_metadata = regime_metadata_for_features(selected_feature_cols, as_of_date)
         row_common = {
             "experiment_id": experiment_id,
             "pipeline_run_id": pipeline_run_id,
@@ -1205,6 +1267,7 @@ def run_config_evaluation(task: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.Da
             "sequence_stride": representation_metadata["sequence_stride"],
             "prediction_head": representation_metadata["prediction_head"],
             "n_train": int(len(train_df)),
+            **regime_metadata,
         }
         predictions.append(
             {

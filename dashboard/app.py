@@ -866,8 +866,8 @@ def render_data_page(
         },
         {
             "Feature type": "Regime indicators",
-            "Examples": "is_covid_disruption, is_post_covid, months_since_covid_impact",
-            "Purpose": "Let models distinguish ordinary history from disruption and recovery periods.",
+            "Examples": "pandemic_observed, pandemic_disruption_active, months_since_pandemic_observed",
+            "Purpose": "Let models distinguish ordinary history from known disruption and recovery periods.",
         },
         {
             "Feature type": "Exogenous context",
@@ -876,7 +876,7 @@ def render_data_page(
         },
         {
             "Feature type": "Targeted interactions",
-            "Examples": "income_yoy_pct_x_gas_price_yoy_diff, lag_x_regime flags",
+            "Examples": "income_yoy_pct_x_gas_price_yoy_diff, lag_x_pandemic flags",
             "Purpose": "Let linear models express selected non-additive relationships without a full polynomial explosion.",
         },
     ]
@@ -891,13 +891,17 @@ def render_data_page(
         sample = sample.sort_values("target_date").iloc[len(sample) // 2]
         target_date = pd.Timestamp(sample["target_date"])
         as_of_date = pd.Timestamp(sample["as_of_date"])
-        months_since_covid = (target_date.year - 2020) * 12 + (target_date.month - 3)
+        pandemic_start = pd.Timestamp("2020-03-01")
+        months_since_pandemic = max(
+            0,
+            (as_of_date.year - pandemic_start.year) * 12 + (as_of_date.month - pandemic_start.month),
+        )
         example_rows = [
             ("as_of_date", as_of_date.date().isoformat(), "Training data is limited to rows before this month."),
             ("target_date", target_date.date().isoformat(), "This is the month being forecast three months ahead."),
             ("target_month", target_date.strftime("%B"), "Seasonality features encode this month cyclically."),
             ("evaluation_period", sample.get("evaluation_period", "-"), "Used for pre-COVID, shock, recovery, and recent metrics."),
-            ("months_since_covid_impact", months_since_covid, "A time-since-disruption signal for regime-aware features."),
+            ("months_since_pandemic_observed", str(months_since_pandemic), "A time-since-observed-disruption signal available only from the as-of month."),
             ("actual_upt", format_int(sample.get("actual")), "Observed ridership for the target month."),
             ("prediction", format_int(sample.get("prediction")), "The selected model's forecast for that target month."),
             ("seasonal_naive_prediction", format_int(sample.get("seasonal_naive_prediction")), "Same-month-last-year baseline used for comparison and residual mode."),
@@ -2178,14 +2182,22 @@ def main() -> None:
         st.markdown(PROJECT_OVERVIEW)
         render_public_bundle_note(experiment_manifest)
 
-        overview_cols = st.columns(4)
+        bundle = experiment_manifest.get("public_dashboard_bundle", {})
+        full_config_count = bundle.get("source_configurations") or experiment_manifest.get("model_config_count") or len(leaderboard)
+        displayed_config_count = bundle.get("selected_configurations") or len(leaderboard)
+        full_prediction_count = experiment_manifest.get("prediction_count") or len(forecast_paths)
+        displayed_prediction_count = len(forecast_paths)
+
+        overview_cols = st.columns(6)
         overview_cols[0].metric(
             "Forecast Horizon",
             f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months",
         )
-        overview_cols[1].metric("Model Configs", format_int(len(leaderboard)))
-        overview_cols[2].metric("Rolling Predictions", format_int(len(forecast_paths)))
-        overview_cols[3].metric("Target Window", date_range_label(forecast_paths, "target_date"))
+        overview_cols[1].metric("Full Model Configs", format_int(full_config_count))
+        overview_cols[2].metric("Displayed Configs", format_int(displayed_config_count))
+        overview_cols[3].metric("Full Rolling Predictions", format_int(full_prediction_count))
+        overview_cols[4].metric("Displayed Predictions", format_int(displayed_prediction_count))
+        overview_cols[5].metric("Target Window", date_range_label(forecast_paths, "target_date"))
 
     with tab_data:
         render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)

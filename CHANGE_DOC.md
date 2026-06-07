@@ -1,5 +1,28 @@
 # Project Change Document
 
+## As-Of-Safe Pandemic Regime Feature Contract
+
+- Generalized model-facing regime features from COVID-specific names to
+  `pandemic_*` names:
+  - `pandemic_observed`
+  - `pandemic_disruption_active`
+  - `post_pandemic_observed`
+  - `months_since_pandemic_observed`
+- Kept legacy COVID-specific aliases in the feature table for backward
+  compatibility with earlier experiment artifacts.
+- Added explicit regime metadata to model artifacts:
+  - `regime_policy`
+  - `regime_event_id`
+  - `regime_observed_start_date`
+  - `regime_features_available_as_of`
+  - `uses_target_period_features`
+  - `regime_feature_names_json`
+- Documented the distinction between model-facing pandemic-observed features and
+  evaluation-only period labels. Models should never train on target-period
+  labels or future countdowns; pre-observed regime values remain neutral.
+- Updated dashboard explanatory text and the single-forecast example to use the
+  generalized pandemic-observed vocabulary.
+
 ## Pipeline Storage Format
 
 - Changed the three normalization scripts to write Parquet instead of CSV:
@@ -1068,3 +1091,73 @@
   - `272` model configurations
   - `180` monthly as-of dates
   - `48,960` rolling fits before runtime policy deduplication
+
+## Pandemic-Safe Phase A Rerun Preparation
+
+- Rebuilt `feature_store/income_interactions_h3_v1` from the income-aware local
+  feature table using the updated pandemic-safe feature logic.
+- Confirmed the rebuilt feature table has:
+  - `275` rows and `165` columns
+  - neutral pre-pandemic regime values
+  - no negative countdown-style disruption feature
+  - no legacy `covid` columns inside feature family definitions
+- Added `docs/aws_catchup_todo.md` to track the AWS work still needed for:
+  - income ingestion and normalization
+  - income-aware monthly integration
+  - pandemic-safe feature-table generation
+  - refreshed ECS image/task definition
+  - Step Functions income branch
+  - small cloud-side modeling smoke test
+- Added `experiment_configs/large_phase_a_v3_pandemic_safe.yaml` as a clean
+  Phase A rerun config with separate result, checkpoint, dashboard, DuckDB, and
+  MLflow locations.
+- Validated the Phase A v3 planner output:
+  - `7,141` implemented model configurations
+  - `180` monthly as-of dates
+  - `1,285,380` estimated model/as-of rows
+  - `21` of `21` requested feature families found
+
+## Pandemic-Safe Phase A Dashboard Refresh
+
+- Completed the local Phase A v3 pandemic-safe rerun.
+- Confirmed the run produced:
+  - `1,285,380` rolling predictions
+  - `7,141` model configurations
+  - a new Phase A champion: `xgboost`, `raw`,
+    `history_regime_time_linear_interactions`, `tree_top_30`
+- Rebuilt the DuckDB mart/export from the Phase A v3 results only.
+- Replaced the local dashboard `latest` artifact bundle with the Phase A v3
+  export.
+- Rebuilt the deploy-friendly public dashboard bundle from Phase A v3 with old
+  Phase B autoregressive and Phase C neural artifacts intentionally excluded
+  until those phases are rerun against the pandemic-safe feature table.
+- Restarted the local Streamlit dashboard on port `8507` against the refreshed
+  Phase A v3 artifact bundle.
+
+## Pandemic-Safe Phase B Rerun And A+B Dashboard Refresh
+
+- Added `experiment_configs/phase_b_autoregressive_v3_pandemic_safe.yaml` as a
+  clean autoregressive rerun config pointed at the pandemic-safe income-aware
+  feature table.
+- Validated the Phase B v3 config before execution:
+  - `99` autoregressive configurations
+  - ARIMA, SARIMA, and SARIMAX coverage
+  - no missing SARIMAX exogenous columns
+- Completed the local Phase B v3 pandemic-safe rerun.
+- Confirmed the run produced:
+  - `17,820` rolling predictions
+  - `99` autoregressive model configurations
+  - a Phase B-only champion: `sarimax`, `raw`, `service`
+- Combined Phase A v3 and Phase B v3 results into:
+  - `experiments_output/combined_phase_ab_v3_pandemic_safe/results`
+  - `dashboard_artifacts/aws_streamlined/combined_phase_ab_v3_pandemic_safe`
+- Rebuilt the combined DuckDB mart/export:
+  - `experiments_output/combined_phase_ab_v3_pandemic_safe/experiments.duckdb`
+  - `dashboard_artifacts/aws_streamlined/combined_phase_ab_v3_pandemic_safe_from_duckdb`
+- Refreshed local dashboard `latest` artifacts from the combined A+B export.
+- Rebuilt `dashboard/public_artifacts/latest` from the combined A+B export with
+  the deploy-friendly retention filter.
+- Confirmed the public bundle now includes baseline, linear, tree, ARIMA,
+  SARIMA, and SARIMAX configurations.
+- Restarted the local Streamlit dashboard on port `8507` against the refreshed
+  combined A+B artifact bundle.

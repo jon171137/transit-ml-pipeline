@@ -2,9 +2,9 @@
   "as_of_end": "2025-12-01",
   "as_of_frequency_months": 1,
   "as_of_start": "2011-01-01",
-  "champion_config_id": "xgboost__raw__history_regime_time__policy-mutual_info_top_30__colsample_bytree-0.8_learning_rate-0.05_max_depth-3_min_child_weight-1_n_estimators-500_subsample-0.8",
-  "created_at_utc": "2026-05-29T07:12:46.252478+00:00",
-  "experiment_id": "combined_phase_ab_v2_complexity",
+  "champion_config_id": "xgboost__raw__history_regime_time_linear_interactions__policy-tree_top_30__colsample_bytree-0.8_learning_rate-0.05_max_depth-3_min_child_weight-1_n_estimators-500_subsample-0.8",
+  "created_at_utc": "2026-06-07T19:56:33.314377+00:00",
+  "experiment_id": "combined_phase_ab_v3_pandemic_safe",
   "feature_policies": [
     "corr_pruned",
     "lasso_selected",
@@ -53,23 +53,23 @@
       "large_error_score_shock_penalty": 362,
       "mae": 362,
       "pre_covid_mae": 362,
-      "pre_covid_rmse": 363,
+      "pre_covid_rmse": 362,
       "pre_covid_selection_score_balanced": 362,
       "pre_covid_selection_score_large_error": 362,
       "pre_covid_selection_score_typical": 362,
       "r2": 362,
-      "r2_adjusted": 147,
-      "recent_mae": 363,
+      "r2_adjusted": 148,
+      "recent_mae": 362,
       "recent_recovery_ratio": 362,
       "recent_rmse": 362,
-      "recent_selection_score_balanced": 363,
-      "recent_selection_score_large_error": 362,
-      "recent_selection_score_typical": 363,
+      "recent_selection_score_balanced": 362,
+      "recent_selection_score_large_error": 363,
+      "recent_selection_score_typical": 362,
       "recovery_mae": 362,
       "recovery_ratio": 362,
       "recovery_rmse": 362,
       "recovery_selection_score_balanced": 362,
-      "recovery_selection_score_large_error": 363,
+      "recovery_selection_score_large_error": 362,
       "recovery_selection_score_typical": 362,
       "rmse": 362,
       "rmse_recent_recovery_ratio": 362,
@@ -84,22 +84,22 @@
       "typical_score_recovery_ratio": 362,
       "typical_score_shock_penalty": 362
     },
-    "selected_configurations": 2211,
+    "selected_configurations": 2289,
     "source_configurations": 7240,
     "source_dir": "dashboard_artifacts/aws_streamlined/latest"
   },
-  "run_id": "combined_phase_ab_v2_complexity",
+  "run_id": "combined_phase_ab_v3_pandemic_safe",
   "runtime": {
     "compute_context": "local_combined"
   },
-  "selection_rule": "Choose the simplest model within 2% of the best weighted score, where score = 0.75 * MAE + 0.25 * RMSE.",
+  "selection_rule": "Choose the simplest model within 2% of the best balanced weighted score, where balanced score = 0.75 * MAE + 0.25 * RMSE. The dashboard also stores typical-error and large-error score variants for alternate rankings.",
   "source_experiments": [
-    "large_phase_a_v2_complexity",
-    "phase_b_autoregressive_v2_complexity"
+    "large_phase_a_v3_pandemic_safe",
+    "phase_b_autoregressive_v3_pandemic_safe"
   ],
   "source_results_dirs": [
-    "experiments_output/large_phase_a_v2_complexity/results",
-    "experiments_output/phase_b_autoregressive_v2_complexity/results"
+    "experiments_output/large_phase_a_v3_pandemic_safe/results",
+    "experiments_output/phase_b_autoregressive_v3_pandemic_safe/results"
   ],
   "target": "upt"
 }

@@ -90,6 +90,11 @@ mode
 feature_family_name
 feature_policy
 feature_set_id
+regime_policy
+regime_event_id
+regime_observed_start_date
+regime_features_available_as_of
+uses_target_period_features
 hyperparameters_json
 n_features
 n_features_before_policy
@@ -139,6 +144,15 @@ Notes:
   used by that model run. For `feature_policy = none`, it should match the
   feature family. For policies such as `corr_pruned`, it records the reduced
   training-window-safe set.
+- `regime_policy` describes whether the selected feature set includes
+  event-aware regime signals. The current generalized value is
+  `pandemic_observed`; models without those columns use `none`.
+- `regime_features_available_as_of` is true only when the as-of month is on or
+  after the observed disruption start. Before that point, generalized pandemic
+  features must be neutral values, never a countdown to a known future event.
+- `uses_target_period_features` should be false for model inputs. Target-period
+  labels such as `covid_shock`, `recovery`, and `recent` are allowed in
+  evaluation artifacts, but should not be used as training features.
 - `representation_policy` captures transforms that change the input
   representation rather than merely selecting columns. Examples include
   `tabular_raw`, `pca_20`, `pca_95`, `sequence_raw`, `sequence_pca_20`, or a
@@ -170,6 +184,11 @@ model_type
 mode
 feature_family_name
 feature_set_id
+regime_policy
+regime_event_id
+regime_observed_start_date
+regime_features_available_as_of
+uses_target_period_features
 actual
 prediction
 baseline_prediction
@@ -188,6 +207,9 @@ Notes:
 - `ape` should be nullable when the actual value is zero or missing.
 - `evaluation_period` supports dashboard views such as `overall`,
   `covid_shock`, `recovery`, `recent`, or custom period labels.
+- `regime_policy` is model-facing metadata. `evaluation_period` is
+  analysis-facing metadata. This separation is what lets the project study
+  pandemic-era performance without letting models train on target-period labels.
 
 ### `metrics.parquet`
 
@@ -260,13 +282,28 @@ includes_rolling
 includes_exogenous
 includes_service
 includes_interactions
+includes_regime
+regime_policy
+regime_event_id
+regime_observed_start_date
+uses_target_period_features
+regime_feature_names_json
 ```
 
 Interaction feature names use an `_x_` infix, for example
-`upt_lag12_x_is_covid_disruption`. The initial interaction design is
-deliberately targeted around regime flags rather than a full polynomial
-expansion, so the dashboard can compare whether explicit shock/recovery
-interactions help linear models without exploding the feature space.
+`upt_lag12_x_pandemic_disruption_active`. The interaction design is
+deliberately targeted around generalized, as-of-safe regime flags rather than a
+full polynomial expansion, so the dashboard can compare whether explicit
+observed-shock/recovery interactions help linear models without exploding the
+feature space. COVID-19 is the current event instance; model-facing feature
+names should use generalized `pandemic_*` or `known_disruption_*` language
+rather than a hindsight-specific event name.
+
+The current feature-table builder uses `pandemic_observed`,
+`pandemic_disruption_active`, `post_pandemic_observed`, and
+`months_since_pandemic_observed`. These are neutral before the disruption is
+observed. Legacy COVID-specific aliases may exist for compatibility, but new
+families and documentation should use the generalized names.
 
 Income features use annual King County median household income as monthly
 prior-year context. Feature names should make that time basis explicit, for
