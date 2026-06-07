@@ -135,24 +135,26 @@ DATA_TIME_FEATURES = """
 DATA_AS_OF_REGIME_FEATURES = """
 ### As-Of Safe Regime Features
 
-- Regime labels are useful, but they must not give the model information from
-  the future.
-- Pre-disruption forecasts should not receive a countdown-style feature such as
-  "months until pandemic"; that would leak the future shock into the training
-  process.
-- The cleaner design is adaptive: before a pandemic or comparable public-health
-  disruption is observable, regime features are neutral or absent. After the
-  disruption is known, parallel experiments can compare models with and without
-  explicit shock/recovery features.
-- Model-facing columns use generalized names such as `pandemic_observed` and
-  `months_since_pandemic_observed`; COVID-19 is the current event instance, not
-  the hard-coded modeling concept.
-- Evaluation-period labels can still be used after the fact to compare
-  pre-COVID, shock, recovery, and recent performance. Those labels are
-  analytical metadata, not necessarily deployable model inputs.
-- The next rerun will separate these ideas more carefully so regime-aware
-  models measure whether known disruption context helps recovery forecasting,
-  not whether a model benefited from hindsight.
+- In a feature family name, `regime` means the model can use deployable
+  context about an observed operating regime: seasonality/trend context,
+  pandemic/disruption flags once the disruption is known, and time-since-known
+  disruption signals.
+- It does **not** mean the model receives future-aware countdown features.
+  Pre-disruption rows do not get a "months until pandemic" signal, because a
+  real model in 2018 would not have known that shock was coming.
+- The model-facing disruption fields use general names such as
+  `pandemic_observed`, `pandemic_disruption_active`, `post_pandemic_observed`,
+  and `months_since_pandemic_observed`. COVID-19 is the event instance in this
+  dataset; the modeling idea is broader public-health or safety disruption
+  awareness.
+- Before the disruption is observable, these fields are neutral. After the
+  disruption is observable, they let the experiment ask whether explicitly
+  marking the changed operating environment helps forecasting during shock,
+  recovery, and the later regime.
+- Evaluation-period labels such as pre-COVID, shock, recovery, and recent are
+  still used after the fact for scoring and interpretation. Those labels are
+  analytical metadata; the model inputs are limited to information that would
+  have been known at each as-of date.
 """
 
 
@@ -172,28 +174,29 @@ recent operating period.
 
 ### Current Experiment Blocks
 
-The current dashboard bundle combines three completed local experiment blocks:
+The current dashboard bundle is centered on the pandemic-safe v3 rerun:
 
-- Phase A: baseline, linear, and tree-based models over the monthly feature
-  table. This includes seasonal naive, Ridge, Lasso, Elastic Net, random forest,
-  Extra Trees, and XGBoost.
-- Phase B: autoregressive models using the same rolling as-of evaluation frame.
+- Phase A v3: baseline, linear, and tree-based models over the rebuilt monthly
+  feature table. This includes seasonal naive, Ridge, Lasso, Elastic Net,
+  random forest, Extra Trees, and XGBoost.
+- Phase B v3: autoregressive models using the same rolling as-of evaluation frame
+  and the same pandemic-safe feature table.
   This includes ARIMA, SARIMA, and SARIMAX, with SARIMAX using compact service,
   economic, income-pressure, and service-economic exogenous sets.
-- Phase C: GPU-trained neural sequence finalists. This includes GRU and LSTM
-  models run monthly across the full evaluation window after broader screening
-  and capacity experiments narrowed the grid.
+- Phase C: GRU and LSTM neural sequence models have been explored separately.
+  They are treated as follow-up artifacts until rerun and reconciled against the
+  pandemic-safe feature table.
 
-All three phases are evaluated from the same monthly as-of timeline and exported through the
-same artifact contract, so their forecasts can be compared in one dashboard
-without special-case logic.
+Phase A and Phase B now share the same monthly as-of timeline, pandemic-safe
+feature logic, and dashboard artifact contract. Phase C is designed to fit that
+same contract once the neural rerun is complete.
 
 ### Comparison Dimensions
 
 The experiment compares several layers of modeling decisions:
 
 - `model_family`: broad modeling group such as baseline, linear, tree,
-  autoregressive, and neural-net.
+  autoregressive, and neural-net when included.
 - `model_build`: specific implementation such as seasonal naive, Ridge, Lasso,
   XGBoost, ARIMA, SARIMA, SARIMAX, GRU, or LSTM.
 - `mode`: raw/direct forecasts versus residual forecasts built around a
@@ -236,7 +239,7 @@ service, time, and economic context have stable additive relationships with the
 target. Regularization matters because wider feature families contain correlated
 lags, rolling summaries, and interaction terms.
 
-**Variations:** Phase A evaluates Ridge, Lasso, and Elastic Net in raw and
+**Variations:** Phase A v3 evaluates Ridge, Lasso, and Elastic Net in raw and
 residual modes. It also varies input treatment across no pruning,
 variance pruning, correlation pruning, mutual-information selection, and
 Lasso-based selection where applicable.
@@ -256,7 +259,7 @@ after the experiment expands into larger ensemble grids.
 They are natural comparators for monthly forecasting because they model lagged
 dependence and, for seasonal variants, recurring annual patterns directly.
 
-**Variations:** Phase B evaluates ARIMA, SARIMA, and SARIMAX. SARIMA adds
+**Variations:** Phase B v3 evaluates ARIMA, SARIMA, and SARIMAX. SARIMA adds
 12-month seasonal terms. SARIMAX adds compact exogenous sets for service,
 economic lagged context, income pressure, and combined service-economic
 signals.
@@ -278,7 +281,7 @@ requiring each relationship to be manually specified. That is useful in a
 ridership series where service, seasonality, economic pressure, and regime
 changes may not combine additively.
 
-**Variations:** Phase A evaluates random forest, Extra Trees, and XGBoost across
+**Variations:** Phase A v3 evaluates random forest, Extra Trees, and XGBoost across
 raw and residual modes, engineered feature families, and tree-appropriate
 policies including variance pruning, mutual-information selection, and
 tree-importance top-30 selection.
@@ -305,40 +308,38 @@ sequence models can recover useful temporal representations across a major
 structural break, not whether additional network capacity automatically wins.
 
 **Variations:** Earlier Phase C screening compared MLP, simple RNN, GRU, and
-LSTM models. Capacity experiments then focused the monthly finalist run on GRU
-and LSTM. The finalist bundle compares raw and residual modes, compact and wider
-feature families, dynamic feature policies, raw sequence representations, and
-selected PCA sequence representations.
+LSTM models. Capacity experiments then focused the neural work on GRU and LSTM.
+Those runs compared raw and residual modes, compact and wider feature families,
+dynamic feature policies, raw sequence representations, and selected PCA
+sequence representations. The next neural pass should rerun the finalists
+against the pandemic-safe feature table so they line up cleanly with Phase A v3
+and Phase B v3.
 
-**Parameter Search:** The monthly finalists use sequence lengths of `36`
-months, batch size `24`, up to `300` epochs, early-stopping patience `25`, and
-learning-rate reduction patience `8`. GRU variants compare recurrent layer
-sizes `[512, 100]` and `[256, 100]` with learning rates `0.001` and `0.0003`.
-LSTM variants compare `[256, 100]` and a larger `[1000, 100]` network with
-learning rates `0.0003` and `0.0025`. Dense heads use `[200, 10]`, with dropout
-and weight decay varied through the finalist definitions.
+**Parameter Search:** The latest neural finalist plan uses sequence lengths of
+`36` months, batch size `24`, up to `300` epochs, early-stopping patience `25`,
+and learning-rate reduction patience `8`. GRU variants compare recurrent layer
+sizes such as `[512, 100]` and `[256, 100]`; LSTM variants include a larger
+`[1000, 100]` style architecture inspired by earlier notebook experiments.
+Dense heads use `[200, 10]`, with dropout, weight decay, and learning rate
+varied through the finalist definitions.
 
-**Observations:** The strongest neural finalist is a residual GRU using a
-compact recent-history family, with overall MAE near 587,000. LSTM is close
-behind. Neural models do not displace the best tree or regularized linear
-models in the full-window leaderboard, but the result is still informative:
-larger sequence models are not automatically better, and residual modeling plus
-compact histories deserves closer inspection in the recent regime.
+**Observations:** The neural work so far is best read as exploratory. It showed
+that larger sequence models can become useful once capacity and training
+patience are increased, but those artifacts should be rerun against the same
+pandemic-safe feature table before being treated as directly comparable to the
+current A/B dashboard bundle.
 
 ### Leaderboard
 
-The dashboard now keeps several weighted error scores instead of treating one
-score as the only answer:
+The dashboard keeps one weighted selection score alongside the direct error
+metrics:
 
-- `typical_error_score = 0.90 * MAE + 0.10 * RMSE`
-- `balanced_score = 0.75 * MAE + 0.25 * RMSE`
-- `large_error_score = 0.50 * MAE + 0.50 * RMSE`
+`balanced_score = 0.75 * MAE + 0.25 * RMSE`
 
 MAE keeps the score focused on typical absolute error. RMSE adds pressure
-against occasional large misses. The typical-error score is useful when the
-main question is ordinary month-to-month accuracy. The large-error score is
-useful when avoiding occasional bad misses matters more. The balanced score
-preserves the original project default between those two priorities.
+against occasional large misses. The balanced score is the project default
+because it preserves that tradeoff without turning the leaderboard into a wall
+of nearly redundant metrics.
 
 The current champion is still selected with the balanced score plus a 2 percent
 equivalence band, then the simpler model is preferred when performance is close
@@ -357,33 +358,34 @@ also calculates performance by target-month period:
 - `recovery`: early recovery and adjustment
 - `recent`: the newer operating regime
 
-The same score recipes are also calculated inside each period. That makes it
-possible to ask whether a model is best under ordinary conditions, best during
-the COVID shock, best during recovery, or best in the recent operating regime.
-The derived ratios compare each disruption/recovery period against pre-COVID
-error. A model with a low overall score but a high shock penalty may be accurate
-on average while still being fragile at the moment when robustness matters most.
+MAE and RMSE are calculated inside each period. That makes it possible to ask
+whether a model is best under ordinary conditions, best during the COVID shock,
+best during recovery, or best in the recent operating regime. The derived ratios
+compare each disruption/recovery period against pre-COVID error. A model with a
+low overall score but a high shock penalty may be accurate on average while
+still being fragile at the moment when robustness matters most.
 
 ### Primary Insights
 
-The current run is large enough to support real comparison across model family,
-model build, feature family, feature policy, raw/residual mode, and
-period-specific shock/recovery behavior. Additional local refinements and any
-future target variants can be added without changing the dashboard contract.
+The current v3 A/B run is large enough to support real comparison across model
+family, model build, feature family, feature policy, raw/residual mode, and
+period-specific shock/recovery behavior. Additional local refinements, neural
+reruns, and any future target variants can be added without changing the
+dashboard contract.
 
 The current pattern is already useful. Strong boosted-tree models lead the
 combined leaderboard under the current selection rule. Regularized linear
 models remain surprisingly competitive and interpretable. SARIMAX provides a
 useful time-series comparison point with explicit structure and AIC/BIC
-diagnostics. Neural finalists add a GPU-trained sequence-model comparison under
-the same monthly historical evaluation frame.
+diagnostics. Neural finalists remain the next block to reconcile under the same
+pandemic-safe feature logic.
 
 ### Broader Experiment Scope
 
 The larger local research path can continue expanding breadth and depth while
 preserving the same output contract. Useful follow-up directions include
-targeted Phase A refinements, narrower neural follow-ups around the most
-promising residual sequence models, and additional target variants.
+targeted Phase A refinements, a pandemic-safe Phase C rerun around the most
+promising GRU/LSTM sequence models, and additional target variants.
 
 The key requirement for the broader run is checkpointed, queryable experiment
 storage. DuckDB now sits between raw experiment artifacts and the dashboard,
@@ -415,23 +417,16 @@ if the model was trained at each historical as-of date, how accurate was its
 `recovery` covers July 2021 through December 2022.
 `recent` covers January 2023 onward.
 
-The dashboard provides three weighted score families:
-
-`typical_error_score = 0.90 * MAE + 0.10 * RMSE`.
-This emphasizes ordinary month-to-month absolute error, so it is useful when
-typical accuracy matters more than rare misses.
+The dashboard provides one weighted selection score alongside direct MAE and
+RMSE metrics:
 
 `balanced_score = 0.75 * MAE + 0.25 * RMSE`.
-This is the original project scoring logic and balances typical accuracy with a
-moderate penalty for larger mistakes.
+This is the project scoring logic and balances typical accuracy with a moderate
+penalty for larger mistakes.
 
-`large_error_score = 0.50 * MAE + 0.50 * RMSE`.
-This gives RMSE enough weight to surface models that avoid large misses, even if
-their ordinary absolute error is not the lowest.
-
-Each score is also computed within the pre-COVID, shock, recovery, and recent
-periods. Period-specific score ratios use the same structure as the MAE and RMSE
-ratios: period score divided by the pre-COVID score.
+MAE and RMSE are computed overall and within the pre-COVID, shock, recovery,
+and recent periods. Period-specific ratios compare a period's error to the
+pre-COVID error.
 
 `shock_penalty = covid_shock_mae / pre_covid_mae`.
 This asks how much worse the model became during the abrupt COVID disruption
@@ -457,18 +452,12 @@ accuracy.
 
 
 PERIOD_METRIC_SHORT_EXPLANATION = """
-The leaderboard includes overall and period-specific MAE, RMSE, and weighted
-error scores. These are useful for finding models that were not just accurate
-overall, but also resilient through disruption.
-
-`typical_error_score = 0.90 * MAE + 0.10 * RMSE`.
-This favors ordinary month-to-month accuracy.
+The leaderboard includes the overall balanced score plus overall and
+period-specific MAE/RMSE. These are useful for finding models that were not just
+accurate overall, but also resilient through disruption.
 
 `balanced_score = 0.75 * MAE + 0.25 * RMSE`.
 This preserves the original project default and lightly penalizes large misses.
-
-`large_error_score = 0.50 * MAE + 0.50 * RMSE`.
-This emphasizes consistency by making large misses more expensive.
 
 `shock_penalty = covid_shock_mae / pre_covid_mae`.
 This emphasizes how fragile or resilient a model was when ridership behavior
