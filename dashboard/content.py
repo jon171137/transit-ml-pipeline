@@ -12,7 +12,7 @@ PROJECT_OVERVIEW_CASE_STUDY = """
 PROJECT_OVERVIEW_SYSTEM = """
 ### What The System Does
 
-- Ingests and normalizes transit, service, fuel, inflation, and income context.
+- Ingests and normalizes transit service, fuel price, general inflation, and income context.
 - Builds a monthly integrated feature table and feature-family definitions.
 - Trains models across repeated historical as-of dates.
 - Publishes curated Parquet/JSON artifacts for dashboard exploration.

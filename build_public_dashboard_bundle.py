@@ -136,6 +136,16 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Always keep baseline models for comparison context.",
     )
+    parser.add_argument(
+        "--min-configs-per-build",
+        type=int,
+        default=1,
+        help=(
+            "Always keep at least this many top configurations per model_build. "
+            "This preserves model-family coverage in the public bundle even when "
+            "one build is not globally competitive."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -255,6 +265,7 @@ def select_public_configs(
     keep_fraction: float,
     include_baseline: bool,
     include_secondary_retention_metrics: bool,
+    min_configs_per_build: int,
 ) -> tuple[set[str], dict]:
     selected: set[str] = set()
     by_metric: dict[str, int] = {}
@@ -285,6 +296,21 @@ def select_public_configs(
         )
         selected |= baseline_ids
         by_metric["always_baseline"] = len(baseline_ids)
+
+    if min_configs_per_build > 0 and "model_build" in leaderboard.columns:
+        sort_metric = "selection_score_balanced" if "selection_score_balanced" in leaderboard.columns else "selection_score"
+        if sort_metric in leaderboard.columns:
+            ranked = leaderboard.copy()
+            ranked[sort_metric] = pd.to_numeric(ranked[sort_metric], errors="coerce")
+            per_build = (
+                ranked[ranked[sort_metric].notna()]
+                .sort_values(["model_build", sort_metric])
+                .groupby("model_build", dropna=False)
+                .head(min_configs_per_build)
+            )
+            per_build_ids = set(per_build[model_id_column(per_build)].astype(str).tolist())
+            selected |= per_build_ids
+            by_metric["always_top_per_model_build"] = len(per_build_ids)
 
     champion_id = champion.get("model_config_id") or champion.get("config_id")
     if champion_id:
@@ -362,6 +388,7 @@ def main() -> None:
         keep_fraction=args.keep_fraction,
         include_baseline=args.include_baseline,
         include_secondary_retention_metrics=args.include_secondary_retention_metrics,
+        min_configs_per_build=args.min_configs_per_build,
     )
 
     if args.output_dir.exists():
