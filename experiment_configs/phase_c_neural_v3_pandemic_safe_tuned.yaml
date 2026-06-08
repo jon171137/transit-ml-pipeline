@@ -1,0 +1,118 @@
+experiment_id: phase_c_neural_v3_pandemic_safe_tuned
+description: >
+  Tuned-down Phase C neural run using the pandemic-safe feature table. This
+  keeps the monthly Phase A/B evaluation window, but narrows breadth around the
+  GRU and LSTM neighborhoods that performed best in prior neural screening and
+  refinement runs.
+
+status: draft-review
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_c_neural_v3_pandemic_safe_tuned/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_c_neural_v3_pandemic_safe_tuned
+
+forecast:
+  target: upt
+  horizon: 3
+  # Same synthetic-deployment window as the Phase A/B pandemic-safe reruns.
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  min_train_rows: 30
+
+execution:
+  device: auto
+  random_seed: 42
+  deterministic: true
+  dynamic_policy_dedup: true
+  checkpointing:
+    chunk_dir: experiments_output/phase_c_neural_v3_pandemic_safe_tuned/chunks
+    checkpoint_dir: experiments_output/phase_c_neural_v3_pandemic_safe_tuned/checkpoints
+    resume: true
+
+tracking:
+  mlflow:
+    enabled: false
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-phase-c-neural-v3
+    run_name: phase_c_neural_v3_pandemic_safe_tuned
+
+feature_families:
+  include:
+    # Prior neural screens repeatedly surfaced compact history and regime-time
+    # families. The remaining branches keep one broad history control, one
+    # income-pressure family, and one interaction-rich exogenous candidate.
+    - history_recent
+    - history_full
+    - history_regime_time
+    - history_regime_time_linear_interactions
+    - history_regime_income_pressure
+    - history_regime_exog_linear_interactions
+
+modes:
+  # Prior top neural results were strongest in residual mode; raw mode is
+  # deferred to a later challenger run if this tuned block looks promising.
+  - residual
+
+policy_representation_variants:
+  # Keep raw sequence representations only. The runner will skip policy branches
+  # that are inapplicable or dynamically equivalent for a given feature family.
+  - {feature_policy: none, representation_policy: sequence_raw}
+  - {feature_policy: variance_pruned, representation_policy: sequence_raw}
+  - {feature_policy: corr_pruned, representation_policy: sequence_raw, min_family_features: 30}
+  - {feature_policy: mutual_info_top_30, representation_policy: sequence_raw, min_family_features: 31}
+
+neural_defaults: &neural_defaults
+  dropout: 0.1
+  weight_decay: 0.0001
+  batch_size: 24
+  max_epochs: 500
+  early_stopping_patience: 40
+  lr_patience: 10
+  lr_factor: 0.65
+  min_lr: 0.000001
+  validation_rows: 12
+
+models:
+  gru:
+    enabled: true
+    param_grid:
+      # Best GRU finalist neighborhood.
+      - <<: *neural_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [512, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.001
+      # Smaller challenger that performed competitively enough to keep.
+      - <<: *neural_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+
+  lstm:
+    enabled: true
+    param_grid:
+      # Best compact LSTM finalist neighborhood.
+      - <<: *neural_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [256, 100]
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.3, 0.0]
+        learning_rate: 0.0003
+      # Higher-capacity Keras-inspired LSTM branch retained because it had the
+      # best recent-period evidence among the large-network experiments.
+      - <<: *neural_defaults
+        sequence_length: 36
+        recurrent_hidden_sizes: [1000, 100]
+        inter_recurrent_dropouts: [0.4]
+        pre_head_dropout: 0.3
+        dense_head_sizes: [200, 10]
+        dense_head_dropouts: [0.0, 0.0]
+        learning_rate: 0.0025
