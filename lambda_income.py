@@ -22,12 +22,15 @@ SOURCE_NAME = os.environ.get("INCOME_SOURCE_NAME", "fred_income")
 FRED_API_KEY = os.environ["FRED_API_KEY"]
 
 STATE_KEY = f"state/{SOURCE_NAME}/latest_ingested.json"
-RAW_PREFIX = f"raw/{SOURCE_NAME}"
+RAW_PREFIX = os.environ.get("INCOME_RAW_PREFIX", f"raw/{SOURCE_NAME}")
 
 BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
 SERIES_MAP = {
-    "king_county_median_household_income": "MHIWA53033A052NCEN",
+    "king_county_median_household_income": os.environ.get(
+        "FRED_INCOME_SERIES_ID",
+        os.environ.get("INCOME_FRED_SERIES_ID", "MHIWA53033A052NCEN"),
+    ),
 }
 
 
@@ -48,6 +51,16 @@ def build_fred_url(series_id: str) -> str:
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def summarize_observations(response_json: dict) -> dict:
+    observations = response_json.get("observations", [])
+    observation_dates = [obs.get("date") for obs in observations if obs.get("date")]
+    return {
+        "observation_count": len(observations),
+        "observation_date_min": min(observation_dates) if observation_dates else None,
+        "observation_date_max": max(observation_dates) if observation_dates else None,
+    }
 
 
 def load_state() -> Optional[dict]:
@@ -89,19 +102,28 @@ def lambda_handler(event, context):
 
             series_payload[name] = {
                 "series_id": series_id,
-                "request_url": url,
+                "request": {
+                    "base_url": BASE_URL,
+                    "series_id": series_id,
+                    "observation_start": "1989-01-01",
+                    "file_type": "json",
+                },
+                "metadata": summarize_observations(response_json),
                 "response": response_json,
             }
+
+        content_bytes = json.dumps(series_payload, sort_keys=True).encode("utf-8")
+        raw_hash = sha256_hex(content_bytes)
 
         raw_payload = {
             "source_name": SOURCE_NAME,
             "provider": "FRED",
             "pulled_at_utc": datetime.now(timezone.utc).isoformat(),
+            "content_sha256": raw_hash,
             "series": series_payload,
         }
 
         raw_bytes = json.dumps(raw_payload, sort_keys=True).encode("utf-8")
-        raw_hash = sha256_hex(raw_bytes)
 
         prior_state = load_state()
         prior_hash = prior_state.get("sha256") if prior_state else None
@@ -125,6 +147,10 @@ def lambda_handler(event, context):
             "source_name": SOURCE_NAME,
             "provider": "FRED",
             "series_ids": SERIES_MAP,
+            "series_metadata": {
+                name: payload["metadata"]
+                for name, payload in series_payload.items()
+            },
             "ingested_at_utc": ingest_time_str,
             "s3_key": raw_key,
             "file_size_bytes": len(raw_bytes),
@@ -148,6 +174,7 @@ def lambda_handler(event, context):
             "source_name": SOURCE_NAME,
             "filename": filename,
             "raw_key": raw_key,
+            "metadata_key": metadata_key,
         }
 
     except HTTPError:

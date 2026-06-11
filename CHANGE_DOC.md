@@ -1161,3 +1161,18 @@
   SARIMA, and SARIMAX configurations.
 - Restarted the local Streamlit dashboard on port `8507` against the refreshed
   combined A+B artifact bundle.
+
+## Income Lambda AWS Adaptation
+
+- Updated `lambda_income.py` for the AWS income ingestion catch-up path.
+- Added `INCOME_RAW_PREFIX` support so the Lambda can write to the same
+  `raw/fred_income` prefix expected by `normalize_fred_income.py`.
+- Added optional `FRED_INCOME_SERIES_ID` / `INCOME_FRED_SERIES_ID` override
+  support while keeping `MHIWA53033A052NCEN` as the default King County median
+  household income FRED series.
+- Changed raw content hashing to exclude run timestamps, so repeated Lambda runs
+  return `no_change` when FRED observations are unchanged.
+- Stopped storing the full FRED request URL with the API key in raw output;
+  stored non-secret request metadata instead.
+- Added observation count and date-range metadata to the raw payload and
+  metadata JSON.
