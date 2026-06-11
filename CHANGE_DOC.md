@@ -1176,3 +1176,24 @@
   stored non-secret request metadata instead.
 - Added observation count and date-range metadata to the raw payload and
   metadata JSON.
+
+## AWS Income Feature Reconciliation
+
+- Investigated the first AWS Step Functions run that added income normalization
+  into the pipeline.
+- Confirmed the AWS normalized income artifact contained the expected prior-year
+  King County income columns.
+- Confirmed the AWS integrated monthly base artifact also retained the expected
+  income columns.
+- Reproduced feature-table generation locally from that AWS integrated artifact:
+  - `275` feature rows
+  - `165` feature columns
+  - income-aware feature families generated successfully
+- Identified the likely failure cause as stale S3 input discovery rather than
+  missing income integration: several scripts selected "latest" objects by
+  lexicographic key order instead of S3 `LastModified`.
+- Updated S3 latest-artifact discovery in the normalizers, monthly integration,
+  feature-table builder, and streamlined model runner to choose the newest object
+  by `LastModified`.
+- Confirmed the edited scripts compile and the AWS integrated artifact can build
+  the feature table locally.

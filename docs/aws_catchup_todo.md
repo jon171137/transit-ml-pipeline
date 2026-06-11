@@ -6,15 +6,20 @@ This file tracks local project changes that still need to be carried into the AW
 
 ## Income Ingestion And Integration
 
-- Add the FRED income ingestion path to AWS using `lambda_income.py` / `normalize_fred_income.py`.
-- Store normalized income artifacts under the intended S3 prefix.
-- Update the Step Functions state machine so income normalization runs with the other source normalizers.
+- Add the FRED income ingestion path to AWS using `lambda_income.py` / `normalize_fred_income.py`. Done for initial smoke.
+- Store normalized income artifacts under the intended S3 prefix. Done for initial smoke.
+- Update the Step Functions state machine so income normalization runs with the other source normalizers. Done for initial smoke.
 - Update `build_integrated_monthly_base.py` in the ECS image and task flow so the integrated monthly base includes:
   - `income_reference_year`
   - `king_county_median_household_income_prior_year`
   - `king_county_monthly_household_income_prior_year`
   - `king_county_income_yoy_pct_prior_year`
   - `king_county_income_2yr_pct_prior_year`
+- Initial AWS integration smoke confirmed the integrated monthly base retained
+  the income columns. The first feature-table run failed because stale S3 input
+  discovery could select an older integrated artifact without income columns.
+- Rebuild and push the ECS image after the S3 `LastModified` latest-artifact
+  fix, then rerun the Step Functions smoke.
 
 ## Pandemic-Safe Regime Features
 
@@ -26,6 +31,9 @@ This file tracks local project changes that still need to be carried into the AW
   - `months_since_pandemic_observed`
 - Confirm feature family definitions use the `pandemic_*` columns, not the legacy `covid_*` aliases.
 - Keep legacy aliases only for compatibility while older dashboard/run artifacts are being phased out.
+- Local smoke against the AWS integrated artifact confirms the feature-table
+  builder can produce the income-aware, pandemic-safe feature table once it is
+  pointed at the correct integrated input.
 
 ## Container And Task Definitions
 

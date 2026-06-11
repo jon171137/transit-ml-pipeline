@@ -175,15 +175,21 @@ def find_latest_s3_key(bucket: str, prefix: str, filename: str) -> str:
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith(f"/{filename}"):
-                candidates.append(key)
+                candidates.append(obj)
 
     if not candidates:
         raise FileNotFoundError(
             f"No {filename!r} objects found under s3://{bucket}/{normalized_prefix}/"
         )
 
-    latest_key = max(candidates)
-    logger.info("Resolved latest integrated input to s3://%s/%s", bucket, latest_key)
+    latest_obj = max(candidates, key=lambda obj: obj["LastModified"])
+    latest_key = latest_obj["Key"]
+    logger.info(
+        "Resolved latest integrated input to s3://%s/%s (LastModified=%s)",
+        bucket,
+        latest_key,
+        latest_obj["LastModified"],
+    )
     return latest_key
 
 
