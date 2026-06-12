@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -39,7 +40,10 @@ DEFAULT_FEATURE_FAMILIES_PATH = Path("dashboard/public_artifacts/latest/feature_
 PHASE_A_V3_CONFIG_PATH = Path("experiment_configs/large_phase_a_v3_pandemic_safe.yaml")
 PHASE_B_V3_CONFIG_PATH = Path("experiment_configs/phase_b_autoregressive_v3_pandemic_safe.yaml")
 PHASE_C_MONTHLY_CONFIG_PATH = Path("experiment_configs/phase_c_neural_monthly_finalists.yaml")
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+# Keep the MOV as the editable capture; use MP4 for browser and Streamlit Cloud playback.
+SYSTEM_ARCH_VIDEO_PATH = IMAGE_ASSET_DIR / "Transit_System_Build.mp4"
+STEP_FUNCTION_SCREENSHOT_PATH = IMAGE_ASSET_DIR / "Step_Function_Screenshot.png"
+VIDEO_MIME_TYPES = {".mov": "video/quicktime", ".mp4": "video/mp4", ".webm": "video/webm"}
 MODEL_FAMILY_ORDER = ["baseline", "linear", "autoregressive", "tree", "neural_net", "neural"]
 MODEL_BUILD_ORDER = [
     "seasonal_naive",
@@ -356,6 +360,37 @@ def inject_site_theme() -> None:
             line-height: 1.35;
         }
 
+        .system-asset-block {
+            margin-top: 1.1rem;
+        }
+
+        .system-asset-block h3 {
+            margin-bottom: 0.25rem;
+        }
+
+        .system-asset-block p {
+            color: var(--portfolio-muted);
+            margin-top: 0;
+            max-width: 62rem;
+        }
+
+        .system-arch-video-frame {
+            width: 100%;
+            aspect-ratio: 1692 / 1852;
+            overflow: hidden;
+            border: 1px solid rgba(0, 127, 104, 0.18);
+            border-radius: 6px;
+            background: #0f172a;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+        }
+
+        .system-arch-video {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
         @media (max-width: 1200px) {
             .compact-kpi-grid {
                 grid-template-columns: repeat(2, minmax(130px, 1fr));
@@ -431,41 +466,43 @@ def render_project_banner() -> None:
     )
 
 
-def display_name_from_path(path: Path) -> str:
-    return path.stem.replace("_", " ").replace("-", " ").strip().title()
-
-
-def discover_dashboard_images(image_dir: Path = IMAGE_ASSET_DIR) -> list[Path]:
-    if not image_dir.exists():
-        return []
-    return sorted(
-        [
-            path
-            for path in image_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-        ]
-    )
-
-
-def render_image_gallery(title: str, intro: str = None) -> None:
-    images = discover_dashboard_images()
+def render_looping_system_video(path: Path, title: str, description: str) -> None:
+    st.markdown('<div class="system-asset-block">', unsafe_allow_html=True)
     st.subheader(title)
-    if intro:
-        st.write(intro)
-
-    if not images:
-        st.info(
-            "Add PNG, JPG, JPEG, or WebP files to "
-            f"`{IMAGE_ASSET_DIR}` and they will appear here."
-        )
+    st.write(description)
+    if not path.exists():
+        st.info(f"Expected video asset not found: `{path}`")
+        st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    for image_path in images:
-        st.image(
-            str(image_path),
-            caption=display_name_from_path(image_path),
-            use_container_width=True,
-        )
+    mime_type = VIDEO_MIME_TYPES.get(path.suffix.lower(), "video/mp4")
+    encoded_video = base64.b64encode(path.read_bytes()).decode("utf-8")
+    st.markdown(
+        f"""
+        <div class="system-arch-video-frame">
+            <video class="system-arch-video" width="1692" height="1852" autoplay muted loop playsinline preload="auto">
+                <source src="data:{mime_type};base64,{encoded_video}" type="{mime_type}">
+                Your browser does not support embedded video playback.
+            </video>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_system_screenshot(path: Path, title: str, description: str) -> None:
+    st.markdown('<div class="system-asset-block">', unsafe_allow_html=True)
+    text_col, image_col = st.columns([1, 1])
+    with text_col:
+        st.subheader(title)
+        st.write(description)
+    with image_col:
+        if path.exists():
+            st.image(str(path), use_container_width=True)
+        else:
+            st.info(f"Expected screenshot asset not found: `{path}`")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def compact_kpi(label: str, value) -> str:
@@ -2205,9 +2242,23 @@ def main() -> None:
         system_cols[0].markdown(SYSTEM_ARCHITECTURE)
         system_cols[1].markdown(SYSTEM_REASONING)
         st.markdown(SYSTEM_OVERVIEW)
-        render_image_gallery(
-            "System Screenshots",
-            "Drop architecture sketches, AWS Step Functions captures, or other system screenshots here as the cloud side evolves.",
+        render_looping_system_video(
+            SYSTEM_ARCH_VIDEO_PATH,
+            "End-to-End System Architecture",
+            (
+                "A short looping walkthrough of the pipeline shape: source ingestion, S3 storage layers, "
+                "ECS and Step Functions processing, local extended experiments, the DuckDB mart, and the "
+                "Streamlit dashboard artifact bundle."
+            ),
+        )
+        render_system_screenshot(
+            STEP_FUNCTION_SCREENSHOT_PATH,
+            "AWS Step Functions Run",
+            (
+                "The AWS orchestration view for the streamlined pipeline, showing parallel normalization, "
+                "integration, feature-table creation, manifest writing, and smoke-scale model training "
+                "running through ECS Fargate tasks."
+            ),
         )
 
     with tab_experiment:
