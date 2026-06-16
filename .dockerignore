@@ -37,6 +37,7 @@ dashboard_artifacts/
 htmlcov/
 logs/
 *.log
+*.zip
 tmp/
 temp/
 
