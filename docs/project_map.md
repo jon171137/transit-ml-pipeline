@@ -190,9 +190,32 @@ Primary files:
 
 ```text
 dashboard/app.py
+dashboard/pages/
+dashboard/charts.py
+dashboard/data_access.py
+dashboard/model_helpers.py
+dashboard/formatting.py
 dashboard/content.py
+dashboard/ui_components.py
 dashboard/requirements.txt
 ```
+
+Current module responsibilities:
+
+| Module | Role |
+|---|---|
+| `dashboard/app.py` | Streamlit shell: theme injection, artifact loading, artifact preparation, and section routing. |
+| `dashboard/pages/overview.py` | Public project overview and bundle framing. |
+| `dashboard/pages/data.py` | Source definitions, source-series EDA, correlation diagnostics, and availability/imputation reporting. |
+| `dashboard/pages/system.py` | System architecture, AWS/local split, and artifact flow explanation. |
+| `dashboard/pages/experiment.py` | Experiment scope, feature families, feature policies, and transform summaries. |
+| `dashboard/pages/model_explorer.py` | Interactive model/path/metric filtering and inspection. |
+| `dashboard/pages/insights.py` | Guided interpretation of selected experiment findings. |
+| `dashboard/charts.py` | Reusable Plotly chart builders shared by pages. |
+| `dashboard/data_access.py` | Cached Parquet/JSON/text loading and artifact path helpers. |
+| `dashboard/model_helpers.py` | Shared model-result ranking, filtering, score-table, and path-loading helpers. |
+| `dashboard/formatting.py` | Shared number formatting, date labels, transform labels, and display names. |
+| `dashboard/ui_components.py` | Reusable HTML/Streamlit UI fragments. |
 
 Dashboard sections:
 
@@ -255,7 +278,7 @@ Because the entry point is inside `dashboard/`, Streamlit Cloud installs from:
 dashboard/requirements.txt
 ```
 
-Keep this file aligned with dashboard runtime imports. It currently needs at least:
+Keep this file aligned with dashboard module runtime imports. It currently needs at least:
 
 ```text
 streamlit
@@ -275,11 +298,22 @@ Before pushing public dashboard changes, run the local smoke checks:
 ```bash
 .venv/bin/python scripts/validate_dashboard_bundle.py
 PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
-  .venv/bin/python -m py_compile dashboard/app.py
+  .venv/bin/python -m py_compile \
+  dashboard/app.py \
+  dashboard/*.py \
+  dashboard/pages/*.py \
+  scripts/validate_dashboard_bundle.py
 ```
 
 The validator checks required public-bundle files, key Parquet schemas,
-manifest row counts, partition row counts, and dashboard runtime dependencies.
+manifest row counts, partition row counts, and dashboard module runtime
+dependencies.
+
+The detailed manual checklist lives in:
+
+```text
+docs/dashboard_smoke_checklist.md
+```
 
 After pushing dashboard changes:
 
@@ -301,8 +335,8 @@ If the live app shows old navigation or old counts, check these first:
 |---|---|
 | New source data or feature logic | `create_feature_table.py`, `docs/experiment_metadata_contract.md`, dashboard Data/System copy |
 | New experiment family | Runner script, `experiment_configs/`, `build_experiment_mart.py`, README, this project map |
-| New dashboard artifact layout | `build_public_dashboard_bundle.py`, `dashboard/app.py`, README, this project map |
-| New public dashboard interpretation | `experiment_results_insights.ipynb`, `dashboard/app.py`, local review notes if useful |
+| New dashboard artifact layout | `build_public_dashboard_bundle.py`, `dashboard/data_access.py`, relevant page module, README, this project map |
+| New public dashboard interpretation | `experiment_results_insights.ipynb`, `dashboard/pages/insights.py`, local review notes if useful |
 | New deployment dependency | `dashboard/requirements.txt` |
 
 ## Historical Docs
@@ -319,9 +353,11 @@ Current orientation docs are:
 ```text
 README.md
 docs/project_map.md
+docs/dashboard_smoke_checklist.md
 docs/experiment_metadata_contract.md
 ```
 
 ## Recommended Next Cleanup After This Map
 
-- Consider modularizing `dashboard/app.py` into data access, charts, formatting, and page modules once content stabilizes.
+- Add a lightweight browser smoke test for the deployed dashboard's most important navigation and Model Explorer controls.
+- Continue trimming page-local text as dashboard findings mature.

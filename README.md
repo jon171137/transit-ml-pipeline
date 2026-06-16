@@ -87,7 +87,13 @@ Streamlit does not train models and does not query a live experiment server. It 
 
 | Path | Purpose |
 |---|---|
-| `dashboard/app.py` | Streamlit dashboard application |
+| `dashboard/app.py` | Streamlit app shell: theme, artifact loading, and page routing |
+| `dashboard/pages/` | Page renderers for Overview, Data, System, Experiment, Model Explorer, and Insights |
+| `dashboard/charts.py` | Reusable Plotly chart builders |
+| `dashboard/data_access.py` | Cached dashboard artifact/source-table loading helpers |
+| `dashboard/model_helpers.py` | Shared model-ranking, filtering, score-table, and path-loading helpers |
+| `dashboard/formatting.py` | Shared labels, number formatting, and display-name helpers |
+| `dashboard/ui_components.py` | Reusable HTML/Streamlit UI fragments |
 | `dashboard/content.py` | Longer dashboard narrative/content blocks |
 | `dashboard/requirements.txt` | Streamlit Cloud runtime dependencies |
 | `dashboard/public_artifacts/latest/` | Committed public dashboard artifact bundle |
@@ -227,12 +233,20 @@ Before pushing dashboard/public-bundle changes to the live site, run:
 ```bash
 .venv/bin/python scripts/validate_dashboard_bundle.py
 PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
-  .venv/bin/python -m py_compile dashboard/app.py
+  .venv/bin/python -m py_compile \
+  dashboard/app.py \
+  dashboard/*.py \
+  dashboard/pages/*.py \
+  scripts/validate_dashboard_bundle.py
 ```
 
 The validator checks required dashboard artifacts, core Parquet schemas,
 manifest row counts, partition row counts, and whether
-`dashboard/requirements.txt` covers the imports used by `dashboard/app.py`.
+`dashboard/requirements.txt` covers imports used by the app shell and local
+dashboard modules.
+
+See `docs/dashboard_smoke_checklist.md` for the fuller pre-push and live-site
+checklist.
 
 ## Requirements Files
 
@@ -352,6 +366,7 @@ The project is currently strongest as a portfolio forecasting lab and systems ar
 - DuckDB-to-dashboard export path.
 - Public Streamlit dashboard with full metadata and on-demand partitioned path loading.
 - EDA and Insights pages that explain source data, seasonality, transformed correlations, model behavior, and limitations.
+- Modular dashboard structure with page modules, shared chart builders, cached data access, and model-result helpers.
 
 Important next work:
 
@@ -359,4 +374,4 @@ Important next work:
 - Add residual diagnostics for top models by period and calendar month.
 - Run a matched tree-family ablation to test why XGBoost dominates the current top-10 slice.
 - Add experiment fairness/search coverage summaries across model families.
-- Modularize `dashboard/app.py` into smaller data access, chart, formatting, and page modules.
+- Add lightweight browser-level dashboard smoke automation for the most important pages and controls.

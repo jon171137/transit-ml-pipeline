@@ -85,7 +85,8 @@ REQUIRED_COLUMNS = {
     },
 }
 
-# Imports that dashboard/app.py needs from the deploy-time dashboard requirements.
+# Imports that dashboard/app.py and its local dashboard modules need from the
+# deploy-time dashboard requirements.
 DASHBOARD_IMPORT_PACKAGE_NAMES = {
     "numpy": "numpy",
     "pandas": "pandas",
@@ -242,9 +243,28 @@ def check_partition_manifest(bundle_dir: Path, failures: list[str]) -> None:
             ok(f"{dataset_name} full row count matches public manifest")
 
 
-def local_module_path(import_name: str, base_dir: Path) -> Optional[Path]:
-    candidate = base_dir / f"{import_name}.py"
-    return candidate if candidate.exists() else None
+def local_module_path(module_name: str, base_dir: Path) -> Optional[Path]:
+    module_parts = module_name.split(".")
+    file_candidate = base_dir.joinpath(*module_parts).with_suffix(".py")
+    if file_candidate.exists():
+        return file_candidate
+    package_candidate = base_dir.joinpath(*module_parts) / "__init__.py"
+    if package_candidate.exists():
+        return package_candidate
+    sibling_candidate = base_dir / f"{module_parts[0]}.py"
+    return sibling_candidate if sibling_candidate.exists() else None
+
+
+def imported_module_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
 
 
 def import_names_from_python_file(path: Path) -> set[str]:
@@ -260,7 +280,7 @@ def import_names_from_python_file(path: Path) -> set[str]:
 
 
 def dashboard_import_names(entry_path: Path) -> set[str]:
-    """Collect imports from app.py and same-directory dashboard modules it imports."""
+    """Collect imports from app.py and local dashboard modules it imports."""
     base_dir = entry_path.parent
     imports: set[str] = set()
     visited: set[Path] = set()
@@ -274,8 +294,8 @@ def dashboard_import_names(entry_path: Path) -> set[str]:
         visited.add(resolved)
         names = import_names_from_python_file(path)
         imports.update(names)
-        for name in names:
-            local_path = local_module_path(name, base_dir)
+        for module_name in imported_module_names(path):
+            local_path = local_module_path(module_name, base_dir)
             if local_path is not None:
                 pending.append(local_path)
 
@@ -307,9 +327,9 @@ def check_dashboard_requirements(failures: list[str]) -> None:
     declared = requirement_names(DASHBOARD_REQUIREMENTS_PATH)
     missing = sorted(req for req in needed if req.lower().replace("_", "-") not in declared)
     if missing:
-        fail(f"dashboard/requirements.txt missing dashboard imports: {', '.join(missing)}", failures)
+        fail(f"dashboard/requirements.txt missing dashboard module imports: {', '.join(missing)}", failures)
     else:
-        ok("dashboard/requirements.txt covers dashboard runtime imports")
+        ok("dashboard/requirements.txt covers dashboard module runtime imports")
 
 
 def validate(bundle_dir: Path) -> int:
