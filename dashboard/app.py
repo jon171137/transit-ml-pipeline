@@ -1,15 +1,22 @@
 import base64
 import json
 import os
+import re
 import sys
 from html import escape
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+try:
+    import polars as pl
+except ImportError:  # Polars is an optimization, not a hard local-dev requirement.
+    pl = None
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -18,8 +25,8 @@ if str(CURRENT_DIR) not in sys.path:
 from content import (
     DATA_CALCULATED_FEATURES,
     DATA_AS_OF_REGIME_FEATURES,
-    DATA_PRIMARY_EDA,
-    DATA_SECONDARY_EDA,
+    DATA_PRIMARY_DATA,
+    DATA_SECONDARY_DATA,
     DATA_TIME_FEATURES,
     EXPERIMENT_OVERVIEW,
     PERIOD_METRIC_EXPLANATION,
@@ -29,6 +36,7 @@ from content import (
     PROJECT_OVERVIEW_SYSTEM,
     REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
     SYSTEM_ARCHITECTURE,
+    SYSTEM_ARTIFACT_FLOW,
     SYSTEM_OVERVIEW,
     SYSTEM_REASONING,
 )
@@ -37,6 +45,10 @@ from content import (
 DEFAULT_ARTIFACT_DIR = Path("dashboard/public_artifacts/latest")
 IMAGE_ASSET_DIR = Path("dashboard/assets/images")
 DEFAULT_FEATURE_FAMILIES_PATH = Path("dashboard/public_artifacts/latest/feature_families.json")
+DEFAULT_INTEGRATED_BASE_PATH = Path("raw_files/integrated_monthly_base.parquet")
+DEFAULT_FEATURE_TABLE_PATH = Path("feature_store/income_interactions_h3_v1/feature_table.parquet")
+DEFAULT_IMPUTATION_LOG_PATH = Path("feature_store/income_interactions_h3_v1/imputation_log.parquet")
+RESULTS_INSIGHTS_NOTEBOOK_PATH = Path("experiment_results_insights.ipynb")
 PHASE_A_V3_CONFIG_PATH = Path("experiment_configs/large_phase_a_v3_pandemic_safe.yaml")
 PHASE_B_V3_CONFIG_PATH = Path("experiment_configs/phase_b_autoregressive_v3_pandemic_safe.yaml")
 PHASE_C_MONTHLY_CONFIG_PATH = Path("experiment_configs/phase_c_neural_monthly_finalists.yaml")
@@ -73,14 +85,24 @@ REQUIRED_FILES = {
     "champion_selection": "champion_selection.json",
 }
 OPTIONAL_FILES = {
+    "model_leaderboard_full": "model_leaderboard_full.parquet",
+    "feature_family_summary_full": "feature_family_summary_full.parquet",
+    "complexity_profile_full": "complexity_profile_full.parquet",
+    "path_partition_manifest": "path_partition_manifest.json",
     "overview_top_models": "overview_top_models.parquet",
     "overview_prediction_paths": "overview_prediction_paths.parquet",
     "experiment_manifest": "experiment_manifest.json",
+}
+PATH_DATASET_DIRS = {
+    "forecast_paths": "forecast_paths_by_build",
+    "performance_over_time": "performance_over_time_by_build",
 }
 
 SCORE_RECIPES = {
     "balanced": {"label": "Balanced score", "mae_weight": 0.75, "rmse_weight": 0.25},
 }
+PER_BUILD_LIMIT_OPTIONS = ["Top 1", "Top 3", "Top 5", "Top 10", "Top 25", "All"]
+TOTAL_LIMIT_OPTIONS = ["All", "Top 5", "Top 10", "Top 15", "Top 25", "Top 50", "Top 100"]
 EVALUATION_PERIODS = {
     "pre_covid": "Pre-COVID",
     "covid_shock": "COVID shock",
@@ -121,6 +143,29 @@ FEATURE_POLICY_DESCRIPTIONS = {
     "tree_top_20": "Fit a shallow Extra Trees selector inside the training window and keep the 20 most important features.",
     "tree_top_30": "Fit a shallow Extra Trees selector inside the training window and keep the 30 most important features.",
 }
+
+FEATURE_TRANSFORM_DESCRIPTIONS = {
+    "identity": "Use the selected feature columns as-is.",
+    "log_signed": "Add signed log1p versions of selected features, preserving direction for negative values.",
+    "quadratic": "Add squared terms for selected features so linear models can fit curved relationships.",
+    "cubic": "Add squared and cubed terms for selected features so linear models can fit stronger nonlinear curvature.",
+    "log_signed_quadratic_cubic": "Add signed-log, squared, and cubed versions of selected features in one expanded representation.",
+}
+
+FEATURE_TRANSFORM_LABELS = {
+    "identity": "No transform",
+    "log_signed": "Signed log",
+    "quadratic": "Quadratic",
+    "cubic": "Cubic",
+    "log_signed_quadratic_cubic": "Signed log + quadratic + cubic",
+}
+FEATURE_TRANSFORM_ORDER = [
+    "identity",
+    "log_signed",
+    "quadratic",
+    "cubic",
+    "log_signed_quadratic_cubic",
+]
 
 PERIOD_RANK_WINDOWS = {
     "Pre-COVID MAE": (None, "2020-02-01"),
@@ -323,6 +368,31 @@ def inject_site_theme() -> None:
             letter-spacing: 0.03em;
         }
 
+        .champion-summary .summary-title-inline {
+            color: var(--portfolio-ink);
+            font-size: 1.05rem;
+            line-height: 1.22;
+            margin-bottom: 0.75rem;
+        }
+
+        .champion-summary .summary-title-inline .summary-title-label {
+            color: var(--portfolio-teal-dark);
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .champion-summary .summary-title-inline .summary-title-divider {
+            color: rgba(47, 50, 58, 0.48);
+            margin: 0 0.25rem;
+        }
+
+        .champion-summary .summary-title-inline .summary-title-context {
+            color: var(--portfolio-ink);
+            font-weight: 450;
+            letter-spacing: 0;
+        }
+
         .champion-summary-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -358,6 +428,200 @@ def inject_site_theme() -> None:
         .champion-summary li {
             margin-bottom: 0.4rem;
             line-height: 1.35;
+        }
+
+        .champion-summary .summary-note {
+            color: var(--portfolio-muted);
+            font-size: 0.78rem;
+            line-height: 1.3;
+            margin: 0.55rem 0 0;
+        }
+
+        .eda-section {
+            margin: 1.05rem 0 1.15rem;
+            padding-top: 0.9rem;
+            border-top: 1px solid rgba(47, 50, 58, 0.12);
+        }
+
+        .eda-section h3 {
+            margin: 0 0 0.15rem;
+            color: var(--portfolio-ink);
+            font-size: 1.05rem;
+            letter-spacing: 0;
+        }
+
+        .eda-section .eda-kicker {
+            color: var(--portfolio-teal-dark);
+            font-size: 0.82rem;
+            font-weight: 750;
+            letter-spacing: 0.03em;
+            margin: 0 0 0.3rem;
+            text-transform: uppercase;
+        }
+
+        .eda-section .eda-context {
+            color: var(--portfolio-muted);
+            font-size: 0.86rem;
+            line-height: 1.35;
+            margin: 0 0 0.8rem;
+            max-width: 60rem;
+        }
+
+        .mom-callout-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+            gap: 0.42rem;
+        }
+
+        .mom-month-card {
+            background: rgba(247, 250, 249, 0.78);
+            border-top: 3px solid rgba(0, 127, 104, 0.38);
+            padding: 0.45rem 0.48rem 0.5rem;
+            min-height: 5.45rem;
+        }
+
+        .mom-month-title {
+            color: var(--portfolio-ink);
+            font-size: 0.78rem;
+            font-weight: 760;
+            line-height: 1.1;
+            margin-bottom: 0.35rem;
+        }
+
+        .mom-badge-row {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.3rem;
+        }
+
+        .mom-badge {
+            align-items: center;
+            border: 2px solid rgba(47, 50, 58, 0.82);
+            border-radius: 999px;
+            display: inline-flex;
+            flex-direction: column;
+            height: 2.75rem;
+            justify-content: center;
+            min-width: 2.75rem;
+            padding: 0.2rem;
+            text-align: center;
+        }
+
+        .mom-badge.transit-positive {
+            background: #1f6f8b;
+            color: #ffffff;
+        }
+
+        .mom-badge.transit-negative {
+            background: #b7791f;
+            color: #ffffff;
+        }
+
+        .mom-badge.gas-positive {
+            background: #c85214;
+            color: #ffffff;
+        }
+
+        .mom-badge.gas-negative {
+            background: #1f6f8b;
+            color: #ffffff;
+        }
+
+        .mom-badge .series {
+            color: inherit;
+            font-size: 0.53rem;
+            font-weight: 760;
+            line-height: 1.05;
+        }
+
+        .mom-badge .value {
+            color: inherit;
+            font-size: 0.62rem;
+            font-weight: 720;
+            line-height: 1.15;
+            margin-top: 0.08rem;
+        }
+
+        .eda-chart-panel {
+            background: rgba(247, 250, 249, 0.48);
+            border-top: 3px solid rgba(0, 127, 104, 0.24);
+            margin: 0.75rem 0 1.15rem;
+            padding: 0.7rem 0.8rem 0.85rem;
+        }
+
+        .eda-chart-panel h4 {
+            color: var(--portfolio-ink);
+            font-size: 0.96rem;
+            line-height: 1.2;
+            margin: 0 0 0.4rem;
+        }
+
+        .eda-chart-panel p {
+            color: var(--portfolio-muted);
+            font-size: 0.84rem;
+            line-height: 1.38;
+            margin: 0 0 0.45rem;
+        }
+
+        .artifact-flow-table {
+            border: 1px solid rgba(47, 50, 58, 0.14);
+            border-radius: 0.55rem;
+            margin: 0.75rem 0 0.55rem;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .artifact-flow-row {
+            display: grid;
+            grid-template-columns: minmax(9rem, 0.85fr) minmax(13rem, 1.45fr) minmax(16rem, 2fr);
+        }
+
+        .artifact-flow-row + .artifact-flow-row {
+            border-top: 1px solid rgba(47, 50, 58, 0.11);
+        }
+
+        .artifact-flow-cell {
+            border-right: 1px solid rgba(47, 50, 58, 0.11);
+            color: var(--portfolio-ink);
+            font-size: 0.86rem;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+            padding: 0.58rem 0.7rem;
+            white-space: normal;
+            word-break: normal;
+        }
+
+        .artifact-flow-cell:last-child {
+            border-right: 0;
+        }
+
+        .artifact-flow-head .artifact-flow-cell {
+            background: rgba(247, 250, 249, 0.95);
+            color: var(--portfolio-muted);
+            font-weight: 700;
+        }
+
+        .artifact-flow-cell code {
+            background: rgba(47, 50, 58, 0.055);
+            border-radius: 0.22rem;
+            color: var(--portfolio-ink);
+            padding: 0.05rem 0.16rem;
+            white-space: normal;
+        }
+
+        @media (max-width: 760px) {
+            .artifact-flow-row {
+                grid-template-columns: 1fr;
+            }
+
+            .artifact-flow-cell {
+                border-right: 0;
+            }
+
+            .artifact-flow-cell + .artifact-flow-cell {
+                border-top: 1px solid rgba(47, 50, 58, 0.08);
+            }
         }
 
         .system-asset-block {
@@ -525,28 +789,86 @@ def champion_summary_item(label: str, value) -> str:
 
 def summary_panel_from_markdown(markdown_text: str) -> str:
     title = "Summary"
-    items = []
+    blocks = []
     current_item = None
+    current_note = None
+
+    def render_inline_markdown(text: str) -> str:
+        html = escape(text)
+        html = re.sub(
+            r"\[([^\]]+)\]\((https?://[^)]+)\)",
+            r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>',
+            html,
+        )
+        html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+        html = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", html)
+        return html
+
+    def flush_item() -> None:
+        nonlocal current_item
+        if current_item:
+            blocks.append(("item", current_item))
+            current_item = None
+
+    def flush_note() -> None:
+        nonlocal current_note
+        if current_note:
+            blocks.append(("note", current_note))
+            current_note = None
+
     for raw_line in markdown_text.strip().splitlines():
         line = raw_line.strip()
         if not line:
+            flush_item()
+            flush_note()
             continue
         if line.startswith("### "):
+            flush_item()
+            flush_note()
             title = line.replace("### ", "", 1).strip()
         elif line.startswith("- "):
-            if current_item:
-                items.append(current_item)
+            flush_item()
+            flush_note()
             current_item = line.replace("- ", "", 1).strip()
         elif current_item:
             current_item += " " + line
-    if current_item:
-        items.append(current_item)
+        else:
+            current_note = f"{current_note} {line}" if current_note else line
+    flush_item()
+    flush_note()
 
-    item_html = "".join(f"<li>{escape(item)}</li>" for item in items)
+    body_parts = []
+    in_list = False
+    for block_type, text in blocks:
+        if block_type == "item":
+            if not in_list:
+                body_parts.append("<ul>")
+                in_list = True
+            body_parts.append(f"<li>{render_inline_markdown(text)}</li>")
+        else:
+            if in_list:
+                body_parts.append("</ul>")
+                in_list = False
+            body_parts.append(f'<p class="summary-note">{render_inline_markdown(text)}</p>')
+    if in_list:
+        body_parts.append("</ul>")
+
+    if " | " in title:
+        title_label, title_context = title.split(" | ", 1)
+        title_html = (
+            '<div class="summary-title-inline">'
+            f'<span class="summary-title-label">{escape(title_label)}</span>'
+            '<span class="summary-title-divider">|</span>'
+            f'<span class="summary-title-context">{escape(title_context)}</span>'
+            "</div>"
+        )
+    else:
+        title_html = f'<div class="summary-title">{escape(title)}</div>'
+
     return (
         '<div class="champion-summary">'
-        f'<div class="summary-title">{escape(title)}</div>'
-        f"<ul>{item_html}</ul>"
+        f"{title_html}"
+        f"{''.join(body_parts)}"
         "</div>"
     )
 
@@ -575,6 +897,13 @@ def render_champion_snapshot(
     summary_items = [
         ("Champion", champion.get("model_type", "-")),
         ("Feature family", champion.get("feature_family_name", "-")),
+        (
+            "Feature transform",
+            FEATURE_TRANSFORM_LABELS.get(
+                str(champion.get("feature_transform", "identity")),
+                str(champion.get("feature_transform", "identity")).replace("_", " ").title(),
+            ),
+        ),
         ("Balanced score", format_int(champion.get("selection_score_balanced", champion.get("selection_score")))),
         ("MAE / RMSE", f"{format_int(champion.get('mae'))} / {format_int(champion.get('rmse'))}"),
         ("Target dates", date_range_label(forecast_paths, "target_date")),
@@ -603,6 +932,13 @@ def render_experiment_summary(
     items = [
         ("Champion", champion.get("model_type", "-")),
         ("Feature family", champion.get("feature_family_name", "-")),
+        (
+            "Feature transform",
+            FEATURE_TRANSFORM_LABELS.get(
+                str(champion.get("feature_transform", "identity")),
+                str(champion.get("feature_transform", "identity")).replace("_", " ").title(),
+            ),
+        ),
         ("Mode", champion.get("mode", "-")),
         ("Balanced score", format_int(champion.get("selection_score_balanced", champion.get("selection_score")))),
         ("Champion MAE", format_int(champion.get("mae"))),
@@ -710,62 +1046,478 @@ def experiment_overview_with_regime_note() -> str:
     return EXPERIMENT_OVERVIEW.replace(marker, DATA_AS_OF_REGIME_FEATURES + "\n\n" + marker, 1)
 
 
-def render_public_bundle_note(experiment_manifest: dict) -> None:
-    bundle = experiment_manifest.get("public_dashboard_bundle")
-    if not bundle:
+def configured_integrated_base_path() -> Path:
+    return Path(os.environ.get("INTEGRATED_BASE_PATH", DEFAULT_INTEGRATED_BASE_PATH))
+
+
+def configured_feature_table_path() -> Path:
+    return Path(os.environ.get("FEATURE_TABLE_PATH", DEFAULT_FEATURE_TABLE_PATH))
+
+
+def configured_imputation_log_path() -> Path:
+    return Path(os.environ.get("IMPUTATION_LOG_PATH", DEFAULT_IMPUTATION_LOG_PATH))
+
+
+@st.cache_data(show_spinner=False)
+def load_integrated_base(path: str, modified_ns: int) -> pd.DataFrame:
+    _ = modified_ns
+    return pd.read_parquet(path)
+
+
+@st.cache_data(show_spinner=False)
+def load_feature_table(path: str, modified_ns: int) -> pd.DataFrame:
+    _ = modified_ns
+    return pd.read_parquet(path)
+
+
+@st.cache_data(show_spinner=False)
+def load_imputation_log(path: str, modified_ns: int) -> pd.DataFrame:
+    _ = modified_ns
+    return pd.read_parquet(path)
+
+
+def integrated_source_series_options() -> list[dict[str, str]]:
+    return [
+        {
+            "column": "upt",
+            "label": "UPT",
+            "description": "Unlinked passenger trips",
+            "unit": "Passenger boardings",
+            "source": "FTA NTD",
+        },
+        {
+            "column": "vrm",
+            "label": "VRM",
+            "description": "Vehicle revenue miles",
+            "unit": "Miles",
+            "source": "FTA NTD",
+        },
+        {
+            "column": "vrh",
+            "label": "VRH",
+            "description": "Vehicle revenue hours",
+            "unit": "Hours",
+            "source": "FTA NTD",
+        },
+        {
+            "column": "voms",
+            "label": "VOMS",
+            "description": "Vehicles operated in maximum service",
+            "unit": "Vehicles",
+            "source": "FTA NTD",
+        },
+        {
+            "column": "seattle_gas_price_avg",
+            "label": "Gas Avg",
+            "description": "Seattle gasoline price average",
+            "unit": "Dollars per gallon",
+            "source": "EIA",
+        },
+        {
+            "column": "seattle_gas_price_std",
+            "label": "Gas Std",
+            "description": "Within-month Seattle gasoline price standard deviation",
+            "unit": "Dollars per gallon",
+            "source": "EIA",
+        },
+        {
+            "column": "cpi_all_items_sa",
+            "label": "CPI All",
+            "description": "CPI all items, seasonally adjusted",
+            "unit": "Index",
+            "source": "FRED",
+        },
+        {
+            "column": "cpi_core_sa",
+            "label": "CPI Core",
+            "description": "CPI all items less food and energy, seasonally adjusted",
+            "unit": "Index",
+            "source": "FRED",
+        },
+        {
+            "column": "king_county_median_household_income_prior_year",
+            "label": "Income",
+            "description": "King County median household income, prior-year context",
+            "unit": "Dollars",
+            "source": "FRED",
+        },
+    ]
+
+
+def integrated_source_series_data() -> tuple[pd.DataFrame, list[dict[str, str]]]:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return pd.DataFrame(), []
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    if "date" not in df.columns:
+        return pd.DataFrame(), []
+
+    options = [option for option in integrated_source_series_options() if option["column"] in df.columns]
+    if not options:
+        return pd.DataFrame(), []
+
+    cols = ["date", *[option["column"] for option in options]]
+    data = (
+        df[cols]
+        .assign(date=lambda x: pd.to_datetime(x["date"], errors="coerce").dt.to_period("M").dt.to_timestamp())
+        .sort_values("date")
+        .dropna(subset=["date"])
+    )
+    return data, options
+
+
+def source_series_figure(data: pd.DataFrame, option: dict[str, str]) -> go.Figure:
+    column = option["column"]
+    plot_df = data[["date", column]].dropna().copy()
+    fig = go.Figure()
+    if plot_df.empty:
+        return fig
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df["date"],
+            y=plot_df[column],
+            mode="lines",
+            name=option["label"],
+            line={"color": "#007f68", "width": 2.5},
+            hovertemplate=(
+                "<b>%{fullData.name}</b><br>"
+                "%{x|%b %Y}<br>"
+                "%{y:,.2f}<extra></extra>"
+            ),
+        )
+    )
+    covid_marker = pd.Timestamp("2020-03-01")
+    fig.add_shape(
+        type="line",
+        x0=covid_marker,
+        x1=covid_marker,
+        y0=0,
+        y1=1,
+        xref="x",
+        yref="paper",
+        line={"color": "rgba(47,50,58,0.45)", "dash": "dash", "width": 1.2},
+    )
+    fig.add_annotation(
+        x=covid_marker,
+        y=1,
+        xref="x",
+        yref="paper",
+        text="COVID",
+        showarrow=False,
+        xanchor="left",
+        yanchor="bottom",
+        font={"size": 11, "color": "rgba(47,50,58,0.75)"},
+    )
+    fig.update_layout(
+        title=f"{option['label']}: {option['description']}",
+        height=360,
+        margin={"l": 70, "r": 25, "t": 56, "b": 48},
+        xaxis_title="Month",
+        yaxis_title=option["unit"],
+        template="plotly_white",
+    )
+    return fig
+
+
+def format_month(value) -> str:
+    if pd.isna(value):
+        return "-"
+    return pd.Timestamp(value).strftime("%b %Y")
+
+
+def date_spine_missing_count(df: pd.DataFrame) -> int:
+    if df.empty or "date" not in df:
+        return 0
+    dates = pd.to_datetime(df["date"], errors="coerce").dropna().dt.to_period("M").dt.to_timestamp()
+    if dates.empty:
+        return 0
+    expected = pd.date_range(dates.min(), dates.max(), freq="MS")
+    return int(len(expected.difference(pd.DatetimeIndex(dates))))
+
+
+def availability_row(
+    df: pd.DataFrame,
+    column: str,
+    label: str,
+    source: str,
+    stage: str,
+    note: str = "",
+) -> dict:
+    if df.empty or "date" not in df or column not in df:
+        return {
+            "Series": label,
+            "Source": source,
+            "Stage": stage,
+            "First available": "-",
+            "Last available": "-",
+            "Observed months": 0,
+            "Missing months": "-",
+            "Missing %": "-",
+            "Note": note or "Column not present in this artifact.",
+        }
+
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    values = df[column]
+    observed_dates = dates[values.notna()]
+    observed = int(values.notna().sum())
+    missing = int(values.isna().sum())
+    total = int(len(values))
+    return {
+        "Series": label,
+        "Source": source,
+        "Stage": stage,
+        "First available": format_month(observed_dates.min()) if observed else "-",
+        "Last available": format_month(observed_dates.max()) if observed else "-",
+        "Observed months": observed,
+        "Missing months": missing,
+        "Missing %": f"{(missing / total * 100):.1f}%" if total else "-",
+        "Note": note,
+    }
+
+
+def data_availability_report_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    integrated_path = configured_integrated_base_path()
+    feature_path = configured_feature_table_path()
+    imputation_log_path = configured_imputation_log_path()
+
+    integrated = pd.DataFrame()
+    feature_table = pd.DataFrame()
+    imputation_log = pd.DataFrame()
+    if integrated_path.exists():
+        integrated = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+        if "date" in integrated:
+            integrated["date"] = pd.to_datetime(integrated["date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    if feature_path.exists():
+        feature_table = load_feature_table(str(feature_path), file_modified_ns(feature_path)).copy()
+        if "date" in feature_table:
+            feature_table["date"] = pd.to_datetime(feature_table["date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    if imputation_log_path.exists():
+        imputation_log = load_imputation_log(str(imputation_log_path), file_modified_ns(imputation_log_path)).copy()
+
+    availability_specs = [
+        ("upt", "UPT", "FTA NTD", "Integrated base", "Transit ridership is complete across the integrated monthly spine."),
+        ("vrm", "VRM", "FTA NTD", "Integrated base", "Service miles are complete across the integrated monthly spine."),
+        ("vrh", "VRH", "FTA NTD", "Integrated base", "Service hours are complete across the integrated monthly spine."),
+        ("voms", "VOMS", "FTA NTD", "Integrated base", "Peak vehicles are complete across the integrated monthly spine."),
+        ("seattle_gas_price_avg", "Seattle gas price avg", "EIA", "Integrated base", "Gas data begins in May 2003; earlier months remain unavailable in the raw integrated base."),
+        ("seattle_gas_price_std", "Seattle gas price std", "EIA", "Integrated base", "Within-month gas price variability begins with the gas source series in May 2003."),
+        ("cpi_all_items_sa", "CPI all items", "FRED", "Integrated base", "The local integrated-base copy has one CPI gap, while the model-ready feature table is complete."),
+        ("cpi_core_sa", "CPI core", "FRED", "Integrated base", "The local integrated-base copy has one CPI gap, while the model-ready feature table is complete."),
+        ("king_county_median_household_income_prior_year", "King County income", "FRED", "Feature table", "Annual income is converted to prior-year monthly context for modeling."),
+    ]
+    availability_rows = []
+    for column, label, source, stage, note in availability_specs:
+        artifact = feature_table if stage == "Feature table" else integrated
+        availability_rows.append(availability_row(artifact, column, label, source, stage, note))
+    availability = pd.DataFrame(availability_rows)
+
+    readiness_rows = []
+    if not integrated.empty and "date" in integrated:
+        readiness_rows.append(
+            {
+                "Check": "Integrated monthly date spine",
+                "Result": f"{format_month(integrated['date'].min())} to {format_month(integrated['date'].max())}",
+                "Detail": f"{len(integrated):,} rows; {date_spine_missing_count(integrated):,} missing calendar months.",
+            }
+        )
+    if not feature_table.empty and "date" in feature_table:
+        target_missing = int(feature_table["upt_target_h3"].isna().sum()) if "upt_target_h3" in feature_table else 0
+        readiness_rows.append(
+            {
+                "Check": "Model-ready feature table",
+                "Result": f"{format_month(feature_table['date'].min())} to {format_month(feature_table['date'].max())}",
+                "Detail": (
+                    f"{len(feature_table):,} rows; starts later because gas availability and lag/rolling features "
+                    "require historical lookback."
+                ),
+            }
+        )
+        readiness_rows.append(
+            {
+                "Check": "H3 target availability",
+                "Result": f"{target_missing:,} missing target rows",
+                "Detail": "The final three as-of rows naturally lack observed future UPT targets.",
+            }
+        )
+        base_cols = [
+            "upt",
+            "vrm",
+            "vrh",
+            "voms",
+            "seattle_gas_price_avg",
+            "seattle_gas_price_std",
+            "cpi_all_items_sa",
+            "cpi_core_sa",
+            "king_county_median_household_income_prior_year",
+        ]
+        available_base_cols = [col for col in base_cols if col in feature_table]
+        base_missing = int(feature_table[available_base_cols].isna().sum().sum()) if available_base_cols else 0
+        readiness_rows.append(
+            {
+                "Check": "Base source values in feature table",
+                "Result": f"{base_missing:,} missing values",
+                "Detail": "The modeling input rows have complete base source values after trimming/preparation.",
+            }
+        )
+    readiness = pd.DataFrame(readiness_rows)
+
+    imputation_cols = [
+        col
+        for col in feature_table.columns
+        if "imputed" in str(col) or str(col).endswith("_was_imputed")
+    ] if not feature_table.empty else []
+    imputation_rows = []
+    for col in imputation_cols:
+        active = int(pd.to_numeric(feature_table[col], errors="coerce").fillna(0).sum())
+        imputation_rows.append(
+            {
+                "Imputation flag": col,
+                "Active rows": active,
+                "Active %": f"{(active / len(feature_table) * 100):.1f}%" if len(feature_table) else "-",
+            }
+        )
+    imputation_summary = pd.DataFrame(imputation_rows)
+    if not imputation_summary.empty:
+        imputation_summary = imputation_summary.sort_values(["Active rows", "Imputation flag"], ascending=[False, True])
+
+    metadata = {
+        "integrated_exists": integrated_path.exists(),
+        "feature_table_exists": feature_path.exists(),
+        "imputation_log_exists": imputation_log_path.exists(),
+        "imputation_log_rows": int(len(imputation_log)),
+    }
+    return availability, readiness, imputation_summary, metadata
+
+
+def render_data_availability_report() -> None:
+    availability, readiness, imputation_summary, metadata = data_availability_report_tables()
+    st.markdown("### Data Availability, Missingness, And Imputation")
+    st.write(
+        "This report summarizes the joined source data before modeling and the "
+        "model-ready feature table after trimming, lag construction, and source "
+        "preparation. The distinction matters: early source gaps can exist in the "
+        "integrated base even when the final modeling rows are complete."
+    )
+    if availability.empty and readiness.empty:
+        st.info("Source availability artifacts were not found in this environment.")
         return
-    retained = format_int(bundle.get("selected_configurations"))
-    source = format_int(bundle.get("source_configurations"))
-    keep_fraction = bundle.get("keep_fraction")
-    keep_pct = f"{float(keep_fraction) * 100:.0f}%" if keep_fraction is not None else "configured"
-    st.info(
-        "This live dashboard uses a curated public artifact bundle for speed. "
-        f"It retains {retained} of {source} model configurations: models in the best "
-        f"{keep_pct} for at least one core performance metric, plus the baseline and "
-        "overall champion. The full local experiment output is preserved separately "
-        "for deeper analysis."
+
+    if not readiness.empty:
+        st.markdown("**Pipeline readiness checks**")
+        st.dataframe(readiness, use_container_width=True, hide_index=True)
+
+    if not availability.empty:
+        st.markdown("**Source series availability**")
+        st.dataframe(availability, use_container_width=True, hide_index=True)
+
+    st.markdown("**Imputation activity**")
+    if imputation_summary.empty:
+        st.write(
+            "No imputation indicator columns were found in the feature table. "
+            "That usually means this artifact was produced before imputation flags were added."
+        )
+    else:
+        active_total = int(imputation_summary["Active rows"].sum())
+        st.write(
+            f"The feature table includes imputation indicators, but this run has "
+            f"{active_total:,} active imputation-flag rows. The imputation log contains "
+            f"{metadata.get('imputation_log_rows', 0):,} row(s)."
+        )
+        st.dataframe(imputation_summary, use_container_width=True, hide_index=True)
+    st.caption(
+        "Imputation is designed for inside-window interpolation and trailing trend fills on selected "
+        "monthly exogenous series. In the current modeling artifact, the selected date window and "
+        "available source files leave those flags inactive."
     )
 
 
-def render_data_page(
-    family_summary: pd.DataFrame,
-    leaderboard: pd.DataFrame,
-    forecast_paths: pd.DataFrame,
-    champion: dict,
-    feature_families: dict,
-) -> None:
-    data_intro_cols = st.columns(2)
-    data_intro_cols[0].markdown(summary_panel_from_markdown(DATA_PRIMARY_EDA), unsafe_allow_html=True)
-    data_intro_cols[1].markdown(summary_panel_from_markdown(DATA_SECONDARY_EDA), unsafe_allow_html=True)
-    data_feature_cols = st.columns(2)
-    data_feature_cols[0].markdown(summary_panel_from_markdown(DATA_CALCULATED_FEATURES), unsafe_allow_html=True)
-    data_feature_cols[1].markdown(summary_panel_from_markdown(DATA_TIME_FEATURES), unsafe_allow_html=True)
+def feature_family_label(name: str) -> str:
+    return str(name).replace("_", " ").title()
 
-    st.markdown("### Source And Processing Map")
-    source_rows = [
-        {
-            "Source": "Transit monthly ridership and service",
-            "What it contributes": "Target ridership plus service/supply context.",
-            "Processing role": "Normalized to monthly grain, joined into the integrated base, then transformed into lags and rolling features.",
-        },
-        {
-            "Source": "EIA gasoline price series",
-            "What it contributes": "Transportation cost context.",
-            "Processing role": "Normalized monthly and used directly plus year-over-year/change features.",
-        },
-        {
-            "Source": "FRED CPI / inflation series",
-            "What it contributes": "General and core price-pressure context.",
-            "Processing role": "Normalized monthly, imputed when needed, then used as exogenous and interaction features.",
-        },
-        {
-            "Source": "FRED King County median household income",
-            "What it contributes": "Annual socioeconomic context.",
-            "Processing role": "Converted to prior-year monthly context with income-growth and affordability-pressure features.",
-        },
-    ]
-    st.dataframe(pd.DataFrame(source_rows), use_container_width=True, hide_index=True)
 
+def feature_family_count_frame(feature_families: dict) -> pd.DataFrame:
+    if not feature_families:
+        return pd.DataFrame()
+
+    feature_path = configured_feature_table_path()
+    available_columns = None
+    if feature_path.exists():
+        feature_table = load_feature_table(str(feature_path), file_modified_ns(feature_path))
+        available_columns = set(feature_table.columns)
+
+    rows = []
+    for family_name, features in feature_families.items():
+        feature_list = [str(feature) for feature in features]
+        requested = len(feature_list)
+        if available_columns is None:
+            available = requested
+        else:
+            available = sum(feature in available_columns for feature in feature_list)
+        rows.append(
+            {
+                "feature_family_name": family_name,
+                "Feature family": feature_family_label(family_name),
+                "Requested features": requested,
+                "Available features": available,
+                "Missing features": max(requested - available, 0),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("Available features", ascending=False)
+
+
+def feature_family_count_figure(counts: pd.DataFrame) -> go.Figure:
+    plot_df = counts.sort_values("Available features", ascending=True).copy()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            y=plot_df["Feature family"],
+            x=plot_df["Available features"],
+            orientation="h",
+            name="Available in feature table",
+            marker={"color": "#007f68"},
+            text=plot_df["Available features"],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Available features: %{x:,}<br>"
+                "Requested features: %{customdata[0]:,}<br>"
+                "Missing features: %{customdata[1]:,}<extra></extra>"
+            ),
+            customdata=plot_df[["Requested features", "Missing features"]],
+        )
+    )
+    if plot_df["Missing features"].sum() > 0:
+        fig.add_trace(
+            go.Bar(
+                y=plot_df["Feature family"],
+                x=plot_df["Missing features"],
+                orientation="h",
+                name="Requested but unavailable",
+                marker={"color": "rgba(47, 50, 58, 0.25)"},
+                hovertemplate="<b>%{y}</b><br>Missing features: %{x:,}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Feature Count By Family",
+        barmode="stack",
+        height=max(460, 24 * len(plot_df) + 120),
+        margin={"l": 220, "r": 40, "t": 70, "b": 50},
+        xaxis_title="Feature count",
+        yaxis_title="",
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font={"color": "#2f323a"},
+        legend={"orientation": "h", "y": 1.04, "x": 0},
+    )
+    fig.update_xaxes(gridcolor="rgba(47, 50, 58, 0.12)")
+    fig.update_yaxes(showgrid=False)
+    return fig
+
+
+def render_feature_family_sections(family_summary: pd.DataFrame, feature_families: dict) -> None:
     st.markdown("### Feature Family Examples")
     if {"feature_family_name", "best_selection_score"}.issubset(family_summary.columns):
         family_display = family_summary.copy()
@@ -806,6 +1558,19 @@ def render_data_page(
         family_cols = [col for col in ["feature_family_name", "mode"] if col in family_summary]
         st.dataframe(family_summary[family_cols].drop_duplicates(), use_container_width=True, hide_index=True)
 
+    st.markdown("### Feature Count By Family")
+    st.write(
+        "Feature families are intentionally uneven: some are compact baselines, "
+        "while others include rolling history, regime context, external economic "
+        "signals, or targeted interaction terms. The count below shows how much "
+        "candidate signal each named family brings into the model-selection stage."
+    )
+    count_frame = feature_family_count_frame(feature_families)
+    if count_frame.empty:
+        st.info("Feature family definitions were not found, so the count chart cannot be rendered.")
+    else:
+        st.plotly_chart(feature_family_count_figure(count_frame), use_container_width=True)
+
     st.markdown("### Feature Family Definitions")
     st.write(
         "These are the named feature families available to the Phase A tabular "
@@ -819,7 +1584,7 @@ def render_data_page(
             "Inspect one feature family",
             sorted(feature_families),
             index=0,
-            key="data_feature_family_definition_select",
+            key="experiment_feature_family_definition_select",
         )
         selected_features = [str(feature) for feature in feature_families[selected_family]]
         feature_count = len(selected_features)
@@ -873,6 +1638,812 @@ def render_data_page(
     ]
     st.dataframe(pd.DataFrame(feature_type_rows), use_container_width=True, hide_index=True)
 
+
+def pre_covid_mom_callouts(threshold: float = 2.0) -> pd.DataFrame:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return pd.DataFrame()
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    if "date" not in df.columns:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    callout_cols = [c for c in ["upt", "vrm", "vrh", "seattle_gas_price_avg"] if c in df.columns]
+    if not callout_cols:
+        return pd.DataFrame()
+
+    pre_covid = (
+        df.loc[df["date"] <= pd.Timestamp("2019-12-01"), ["date", *callout_cols]]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    mom_pct = pre_covid.set_index("date")[callout_cols].pct_change(fill_method=None) * 100
+    mom_pct = mom_pct.replace([float("inf"), float("-inf")], pd.NA)
+    mom_pct["month_num"] = mom_pct.index.month
+    avg_mom_pct_by_month = mom_pct.groupby("month_num")[callout_cols].mean().reindex(range(1, 13))
+
+    label_map = {
+        "upt": "UPT",
+        "vrm": "VRM",
+        "vrh": "VRH",
+        "seattle_gas_price_avg": "Gas",
+    }
+    series_order = {col: idx for idx, col in enumerate(callout_cols)}
+    rows = []
+    for month_num, row in avg_mom_pct_by_month.iterrows():
+        for col in callout_cols:
+            value = row[col]
+            if pd.notna(value) and abs(value) > threshold:
+                rows.append(
+                    {
+                        "month_num": month_num,
+                        "month": pd.Timestamp(2000, month_num, 1).strftime("%B"),
+                        "series": label_map.get(col, col),
+                        "series_order": series_order[col],
+                        "avg_mom_pct": float(value),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def pre_covid_mom_callouts_html(callouts: pd.DataFrame, threshold: float = 2.0) -> str:
+    if callouts.empty:
+        return ""
+
+    month_cards = []
+    for month_num, group in callouts.sort_values(["month_num", "series_order"]).groupby("month_num", sort=True):
+        month_name = str(group["month"].iloc[0])
+        badges = []
+        for row in group.itertuples(index=False):
+            direction = "positive" if row.avg_mom_pct > 0 else "negative"
+            series_kind = "gas" if str(row.series).lower() == "gas" else "transit"
+            badge_class = f"{series_kind}-{direction}"
+            value = f"{row.avg_mom_pct:+.1f}%"
+            badges.append(
+                f'<div class="mom-badge {badge_class}">'
+                f'<div class="series">{escape(str(row.series))}</div>'
+                f'<div class="value">{escape(value)}</div>'
+                "</div>"
+            )
+        month_cards.append(
+            '<div class="mom-month-card">'
+            f'<div class="mom-month-title">{escape(month_name)}</div>'
+            f'<div class="mom-badge-row">{"".join(badges)}</div>'
+            "</div>"
+        )
+
+    return (
+        '<section class="eda-section">'
+        "<h3>EDA</h3>"
+        '<div class="eda-kicker">Summary of month-over-month data trends up until COVID</div>'
+        '<p class="eda-context">'
+        "Average pre-2020 month-over-month changes are shown when the magnitude is "
+        f"greater than {threshold:.0f}%. Transit metrics use teal for increases and amber for decreases; "
+        "gas uses orange for rising cost pressure and teal for declines."
+        "</p>"
+        f'<div class="mom-callout-grid">{"".join(month_cards)}</div>'
+        "</section>"
+    )
+
+
+def lagged_upt_yoy_correlations(max_lag: int = 12) -> pd.DataFrame:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return pd.DataFrame()
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    needed_cols = [
+        "upt",
+        "vrm",
+        "vrh",
+        "voms",
+        "seattle_gas_price_avg",
+        "cpi_all_items_sa",
+        "cpi_core_sa",
+    ]
+    available_cols = [col for col in needed_cols if col in df.columns]
+    if "date" not in df.columns or "upt" not in available_cols:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    yoy = (
+        df[["date", *available_cols]]
+        .sort_values("date")
+        .set_index("date")[available_cols]
+        .pct_change(periods=12, fill_method=None)
+        .replace([float("inf"), float("-inf")], pd.NA)
+    )
+
+    label_map = {
+        "cpi_all_items_sa": "CPI all items",
+        "cpi_core_sa": "CPI core",
+        "seattle_gas_price_avg": "Seattle gas price",
+        "voms": "VOMS",
+        "vrh": "VRH",
+        "vrm": "VRM",
+    }
+    rows = []
+    for predictor in [col for col in available_cols if col != "upt"]:
+        for lag in range(max_lag + 1):
+            aligned = pd.concat(
+                {
+                    "upt_yoy": yoy["upt"],
+                    "predictor_yoy_lagged": yoy[predictor].shift(lag),
+                },
+                axis=1,
+            ).dropna()
+            if len(aligned) > 20:
+                rows.append(
+                    {
+                        "predictor": predictor,
+                        "series": label_map.get(predictor, predictor),
+                        "lag_months": lag,
+                        "correlation": float(aligned["upt_yoy"].corr(aligned["predictor_yoy_lagged"])),
+                        "n": len(aligned),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def lagged_correlation_figure(lagged_corr: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if lagged_corr.empty:
+        return fig
+
+    color_map = {
+        "CPI all items": "#075fed",
+        "CPI core": "#4f8ad9",
+        "Seattle gas price": "#c85214",
+        "VOMS": "#7c3aed",
+        "VRH": "#007f68",
+        "VRM": "#6b7280",
+    }
+    for series, group in lagged_corr.groupby("series", sort=False):
+        group = group.sort_values("lag_months")
+        fig.add_trace(
+            go.Scatter(
+                x=group["lag_months"],
+                y=group["correlation"],
+                mode="lines+markers",
+                name=series,
+                line={"color": color_map.get(series), "width": 2.2},
+                marker={"size": 7},
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "Lag: %{x} months<br>"
+                    "Correlation: %{y:.3f}<extra></extra>"
+                ),
+            )
+        )
+
+    fig.add_hline(y=0, line_color="rgba(47,50,58,0.45)", line_width=1)
+    fig.update_layout(
+        title="Lagged Correlation With UPT YoY Change",
+        height=430,
+        margin={"l": 55, "r": 20, "t": 54, "b": 52},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+        },
+        xaxis_title="Predictor lag in months",
+        yaxis_title="Correlation with UPT YoY",
+        yaxis={"range": [-0.25, 0.65], "zeroline": False},
+        template="plotly_white",
+    )
+    return fig
+
+
+def granger_predictive_screening(max_lag: int = 6) -> pd.DataFrame:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return pd.DataFrame()
+
+    try:
+        import warnings
+
+        from statsmodels.tsa.stattools import grangercausalitytests
+    except ImportError:
+        return pd.DataFrame()
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    signal_cols = [
+        "upt",
+        "vrm",
+        "vrh",
+        "voms",
+        "seattle_gas_price_avg",
+        "cpi_all_items_sa",
+        "cpi_core_sa",
+    ]
+    available_cols = [col for col in signal_cols if col in df.columns]
+    if "date" not in df.columns or "upt" not in available_cols:
+        return pd.DataFrame()
+
+    yoy = (
+        df[["date", *available_cols]]
+        .assign(date=lambda x: pd.to_datetime(x["date"], errors="coerce").dt.to_period("M").dt.to_timestamp())
+        .sort_values("date")
+        .set_index("date")[available_cols]
+        .pct_change(periods=12, fill_method=None)
+        .replace([float("inf"), float("-inf")], pd.NA)
+    )
+    label_map = {
+        "vrm": "VRM",
+        "vrh": "VRH",
+        "voms": "VOMS",
+        "seattle_gas_price_avg": "Gas price",
+        "cpi_all_items_sa": "CPI all",
+        "cpi_core_sa": "CPI core",
+    }
+    rows = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for predictor in [col for col in available_cols if col != "upt"]:
+            test_df = yoy[["upt", predictor]].dropna()
+            if len(test_df) < 40:
+                continue
+            try:
+                result = grangercausalitytests(test_df[["upt", predictor]], maxlag=max_lag, verbose=False)
+                pvals = [float(result[lag][0]["ssr_ftest"][1]) for lag in range(1, max_lag + 1)]
+                best_lag = int(np.argmin(pvals) + 1)
+                rows.append(
+                    {
+                        "predictor": predictor,
+                        "series": label_map.get(predictor, predictor),
+                        "best_lag": best_lag,
+                        "min_p_value": min(pvals),
+                        "pvals_by_lag": ", ".join(f"{p:.3f}" for p in pvals),
+                        "n": len(test_df),
+                    }
+                )
+            except Exception:
+                continue
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).sort_values("min_p_value")
+
+
+def granger_predictive_figure(screening: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if screening.empty:
+        return fig
+
+    plot_df = screening.copy()
+    plot_df["p_for_plot"] = plot_df["min_p_value"].clip(lower=1e-6)
+    plot_df["neg_log10_p"] = -np.log10(plot_df["p_for_plot"])
+    plot_df = plot_df.sort_values("neg_log10_p", ascending=True)
+    threshold = -np.log10(0.05)
+    colors = np.where(plot_df["min_p_value"] < 0.05, "#007f68", "rgba(107, 114, 128, 0.55)")
+
+    fig.add_trace(
+        go.Bar(
+            x=plot_df["neg_log10_p"],
+            y=plot_df["series"],
+            orientation="h",
+            marker={"color": colors},
+            text=[f"p={p:.3f}, lag={lag}" for p, lag in zip(plot_df["min_p_value"], plot_df["best_lag"])],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "-log10(p): %{x:.2f}<br>"
+                "%{text}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_vline(
+        x=threshold,
+        line_dash="dash",
+        line_color="rgba(47,50,58,0.55)",
+        annotation_text="p = 0.05",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        title="Granger-Style UPT YoY Predictive Screening",
+        height=340,
+        margin={"l": 70, "r": 95, "t": 56, "b": 52},
+        xaxis_title="-log10(minimum p-value across 1-6 month lags)",
+        yaxis_title="",
+        template="plotly_white",
+    )
+    return fig
+
+
+def covid_break_diagnostics() -> pd.DataFrame:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return pd.DataFrame()
+
+    try:
+        import statsmodels.api as sm
+        from scipy import stats
+    except ImportError:
+        return pd.DataFrame()
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    signal_cols = [
+        "upt",
+        "vrm",
+        "vrh",
+        "voms",
+        "seattle_gas_price_avg",
+        "cpi_all_items_sa",
+        "cpi_core_sa",
+    ]
+    available_cols = [col for col in signal_cols if col in df.columns]
+    if "date" not in df.columns or "upt" not in available_cols:
+        return pd.DataFrame()
+
+    yoy = (
+        df[["date", *available_cols]]
+        .assign(date=lambda x: pd.to_datetime(x["date"], errors="coerce").dt.to_period("M").dt.to_timestamp())
+        .sort_values("date")
+        .set_index("date")[available_cols]
+        .pct_change(periods=12, fill_method=None)
+        .replace([float("inf"), float("-inf")], pd.NA)
+        .rename(columns={col: f"{col}_yoy" for col in available_cols})
+    )
+    model_df = yoy.copy()
+    model_df["target_date"] = model_df.index + pd.DateOffset(months=3)
+    model_df["upt_yoy_target_h3"] = model_df["upt_yoy"].shift(-3)
+    model_df["target_post_covid"] = (model_df["target_date"] >= pd.Timestamp("2020-03-01")).astype(int)
+    month_dummies = pd.get_dummies(
+        model_df["target_date"].dt.month,
+        prefix="target_month",
+        drop_first=True,
+        dtype=float,
+    )
+    month_dummies.index = model_df.index
+    regression_df = pd.concat([model_df, month_dummies], axis=1).dropna()
+
+    regression_terms = [
+        "upt_yoy",
+        "vrm_yoy",
+        "vrh_yoy",
+        "voms_yoy",
+        "seattle_gas_price_avg_yoy",
+        "cpi_all_items_sa_yoy",
+        "cpi_core_sa_yoy",
+        "target_post_covid",
+        *list(month_dummies.columns),
+    ]
+    regression_terms = [term for term in regression_terms if term in regression_df.columns]
+    if len(regression_df) < len(regression_terms) * 3:
+        return pd.DataFrame()
+
+    break_date = pd.Timestamp("2020-03-01")
+
+    def regression_ssr(input_df: pd.DataFrame) -> tuple[float, int, int]:
+        local_y = input_df["upt_yoy_target_h3"]
+        local_x = sm.add_constant(input_df[regression_terms])
+        fit = sm.OLS(local_y, local_x).fit()
+        return float((fit.resid**2).sum()), len(input_df), local_x.shape[1]
+
+    pooled_ssr, _, pooled_k = regression_ssr(regression_df)
+    pre_break_df = regression_df.loc[regression_df["target_date"] < break_date]
+    post_break_df = regression_df.loc[regression_df["target_date"] >= break_date]
+    if len(pre_break_df) <= pooled_k or len(post_break_df) <= pooled_k:
+        return pd.DataFrame()
+
+    pre_ssr, pre_n, _ = regression_ssr(pre_break_df)
+    post_ssr, post_n, _ = regression_ssr(post_break_df)
+    denominator_df = pre_n + post_n - 2 * pooled_k
+    if denominator_df <= 0:
+        return pd.DataFrame()
+
+    chow_f = ((pooled_ssr - (pre_ssr + post_ssr)) / pooled_k) / (
+        (pre_ssr + post_ssr) / denominator_df
+    )
+    chow_p = 1 - stats.f.cdf(chow_f, pooled_k, denominator_df)
+    mean_test = stats.ttest_ind(
+        pre_break_df["upt_yoy_target_h3"],
+        post_break_df["upt_yoy_target_h3"],
+        equal_var=False,
+    )
+    return pd.DataFrame(
+        [
+            {
+                "test": "Coefficient stability break",
+                "statistic": float(chow_f),
+                "p_value": float(chow_p),
+                "pre_n": int(pre_n),
+                "post_n": int(post_n),
+                "interpretation": "Tests whether the H3 regression relationship is stable before and after COVID.",
+            },
+            {
+                "test": "Mean UPT YoY difference",
+                "statistic": float(mean_test.statistic),
+                "p_value": float(mean_test.pvalue),
+                "pre_n": int(pre_n),
+                "post_n": int(post_n),
+                "interpretation": "Tests whether average target UPT YoY differs across periods.",
+            },
+        ]
+    )
+
+
+def covid_break_figure(break_summary: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if break_summary.empty:
+        return fig
+
+    plot_df = break_summary.copy()
+    plot_df["p_for_plot"] = plot_df["p_value"].clip(lower=1e-16)
+    plot_df["neg_log10_p"] = -np.log10(plot_df["p_for_plot"])
+    colors = np.where(plot_df["p_value"] < 0.05, "#c85214", "rgba(107, 114, 128, 0.55)")
+    fig.add_trace(
+        go.Bar(
+            x=plot_df["test"],
+            y=plot_df["neg_log10_p"],
+            marker={"color": colors},
+            text=[f"p={p:.3g}" for p in plot_df["p_value"]],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>-log10(p): %{y:.2f}<br>%{text}<extra></extra>",
+        )
+    )
+    fig.add_hline(
+        y=-np.log10(0.05),
+        line_dash="dash",
+        line_color="rgba(47,50,58,0.55)",
+        annotation_text="p = 0.05",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        title="COVID Break Diagnostics For H3 UPT YoY Regression",
+        height=330,
+        margin={"l": 55, "r": 30, "t": 56, "b": 78},
+        xaxis_title="",
+        yaxis_title="-log10(p-value)",
+        template="plotly_white",
+    )
+    return fig
+
+
+def trend_month_residualize_dashboard(series: pd.Series) -> pd.Series:
+    y = pd.to_numeric(series, errors="coerce")
+    valid = y.notna()
+    if valid.sum() < 24:
+        return pd.Series(index=series.index, data=pd.NA, name=series.name)
+
+    design = pd.DataFrame(
+        {
+            "intercept": 1.0,
+            "time_index": range(len(series)),
+        },
+        index=series.index,
+        dtype=float,
+    )
+    month_dummies = pd.get_dummies(series.index.month, prefix="month", drop_first=True, dtype=float)
+    month_dummies.index = series.index
+    design = pd.concat([design, month_dummies], axis=1)
+
+    x = design.loc[valid].to_numpy(dtype=float)
+    target = y.loc[valid].to_numpy(dtype=float)
+    beta, *_ = np.linalg.lstsq(x, target, rcond=None)
+    fitted = design.to_numpy(dtype=float) @ beta
+    return pd.Series(y.to_numpy(dtype=float) - fitted, index=series.index, name=series.name)
+
+
+def dashboard_correlation_matrices() -> dict[str, pd.DataFrame]:
+    integrated_path = configured_integrated_base_path()
+    if not integrated_path.exists():
+        return {}
+
+    df = load_integrated_base(str(integrated_path), file_modified_ns(integrated_path)).copy()
+    signal_cols = [
+        "upt",
+        "vrm",
+        "vrh",
+        "voms",
+        "seattle_gas_price_avg",
+        "cpi_all_items_sa",
+        "cpi_core_sa",
+    ]
+    available_cols = [col for col in signal_cols if col in df.columns]
+    if "date" not in df.columns or len(available_cols) < 2:
+        return {}
+
+    label_map = {
+        "upt": "UPT",
+        "vrm": "VRM",
+        "vrh": "VRH",
+        "voms": "VOMS",
+        "seattle_gas_price_avg": "Gas price",
+        "cpi_all_items_sa": "CPI all",
+        "cpi_core_sa": "CPI core",
+    }
+    data = (
+        df[["date", *available_cols]]
+        .assign(date=lambda x: pd.to_datetime(x["date"], errors="coerce").dt.to_period("M").dt.to_timestamp())
+        .sort_values("date")
+        .set_index("date")[available_cols]
+        .rename(columns=label_map)
+    )
+    residuals = data.apply(trend_month_residualize_dashboard)
+    transformed = {
+        "First Differences": data.diff(),
+        "YoY Percent Changes": data.pct_change(periods=12, fill_method=None).replace([float("inf"), float("-inf")], pd.NA),
+        "Trend + Month Residuals": residuals,
+    }
+    return {name: matrix.corr(method="pearson") for name, matrix in transformed.items()}
+
+
+def correlation_heatmap_figure(corr_matrix: pd.DataFrame, title: str) -> go.Figure:
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=corr_matrix.values,
+            x=corr_matrix.columns,
+            y=corr_matrix.index,
+            zmin=-1,
+            zmax=1,
+            colorscale="RdBu",
+            reversescale=True,
+            colorbar={"title": "Pearson r"},
+            text=corr_matrix.round(2).astype(str).values,
+            texttemplate="%{text}",
+            hovertemplate="%{y} vs %{x}<br>r=%{z:.3f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title=title,
+        height=460,
+        margin={"l": 70, "r": 20, "t": 56, "b": 70},
+        xaxis={"side": "bottom", "tickangle": -35},
+        yaxis={"autorange": "reversed"},
+        template="plotly_white",
+    )
+    return fig
+
+
+def render_public_bundle_note(experiment_manifest: dict) -> None:
+    bundle = experiment_manifest.get("public_dashboard_bundle")
+    if not bundle:
+        return
+    retained = format_int(bundle.get("selected_configurations"))
+    source = format_int(bundle.get("source_configurations"))
+    full_path_rows = bundle.get("full_path_rows", {})
+    full_forecast_rows = format_int(full_path_rows.get("forecast_paths")) if isinstance(full_path_rows, dict) else "-"
+    keep_fraction = bundle.get("keep_fraction")
+    keep_pct = f"{float(keep_fraction) * 100:.0f}%" if keep_fraction is not None else "configured"
+    st.info(
+        "This live dashboard uses a performance-aware public artifact bundle. "
+        f"The lightweight model index can cover up to {source} source configurations, "
+        f"while the flat compatibility path files retain {retained} configurations "
+        f"from the best {keep_pct} of core metrics plus baseline/champion models. "
+        f"When available, full path-level rows ({full_forecast_rows} forecasts) are "
+        "loaded on demand from partitioned Parquet files after filters are applied."
+    )
+
+
+def render_system_artifact_flow(experiment_manifest: dict, flat_forecast_rows: int) -> None:
+    st.markdown(SYSTEM_ARTIFACT_FLOW)
+
+    bundle = experiment_manifest.get("public_dashboard_bundle", {})
+    full_path_rows = bundle.get("full_path_rows", {}) if isinstance(bundle.get("full_path_rows"), dict) else {}
+    artifact_cols = st.columns(4)
+    artifact_cols[0].metric(
+        "Full model index",
+        format_int(bundle.get("source_configurations") or bundle.get("full_metadata_configurations")),
+    )
+    artifact_cols[1].metric("Curated flat configs", format_int(bundle.get("selected_configurations")))
+    artifact_cols[2].metric("Full forecast rows", format_int(full_path_rows.get("forecast_paths")))
+    artifact_cols[3].metric("Flat forecast rows", format_int(flat_forecast_rows))
+
+    file_rows = [
+        {
+            "Layer": "Full model metadata",
+            "Path / files": ["model_leaderboard_full.parquet", "complexity_profile_full.parquet"],
+            "Dashboard role": "Filter and compare the full public experiment index without loading every prediction row.",
+        },
+        {
+            "Layer": "Curated compatibility paths",
+            "Path / files": ["forecast_paths.parquet", "performance_over_time.parquet"],
+            "Dashboard role": "Fast initial overview/champion context and backward-compatible dashboard loading.",
+        },
+        {
+            "Layer": "Partitioned full paths",
+            "Path / files": ["forecast_paths_by_build/", "performance_over_time_by_build/"],
+            "Dashboard role": "On-demand forecast and rolling-error rows after Model Explorer filters are applied.",
+        },
+        {
+            "Layer": "Bundle manifests",
+            "Path / files": [
+                "experiment_manifest.json",
+                "public_bundle_manifest.json",
+                "path_partition_manifest.json",
+            ],
+            "Dashboard role": "Document source experiment IDs, curation rules, counts, and partition layout.",
+        },
+    ]
+    rows_html = [
+        """
+        <div class="artifact-flow-row artifact-flow-head">
+            <div class="artifact-flow-cell">Layer</div>
+            <div class="artifact-flow-cell">Path / files</div>
+            <div class="artifact-flow-cell">Dashboard role</div>
+        </div>
+        """
+    ]
+    for row in file_rows:
+        path_html = ", ".join(f"<code>{escape(path)}</code>" for path in row["Path / files"])
+        rows_html.append(
+            f"""
+            <div class="artifact-flow-row">
+                <div class="artifact-flow-cell">{escape(row["Layer"])}</div>
+                <div class="artifact-flow-cell">{path_html}</div>
+                <div class="artifact-flow-cell">{escape(row["Dashboard role"])}</div>
+            </div>
+            """
+        )
+    st.markdown(
+        f'<div class="artifact-flow-table">{"".join(rows_html)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "The public dashboard bundle is static, but it is not limited to a tiny leaderboard. "
+        "Small metadata files describe the broader model universe; larger path-level data is "
+        "split by model build so the app can read only the rows needed for the current view."
+    )
+
+
+def render_data_page(
+    family_summary: pd.DataFrame,
+    leaderboard: pd.DataFrame,
+    forecast_paths: pd.DataFrame,
+    champion: dict,
+    feature_families: dict,
+) -> None:
+    data_intro_cols = st.columns(2)
+    data_intro_cols[0].markdown(summary_panel_from_markdown(DATA_PRIMARY_DATA), unsafe_allow_html=True)
+    data_intro_cols[1].markdown(summary_panel_from_markdown(DATA_SECONDARY_DATA), unsafe_allow_html=True)
+
+    source_series, source_options = integrated_source_series_data()
+    if source_options:
+        st.markdown(
+            """
+            <div class="eda-chart-panel">
+                <h4>Integrated monthly source series</h4>
+                <p>
+                    Before feature engineering, the pipeline joins each normalized source
+                    to a common monthly grain. Use these tabs to inspect one raw integrated
+                    signal at a time across the full available history.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        source_tabs = st.tabs([option["label"] for option in source_options])
+        for tab_panel, option in zip(source_tabs, source_options):
+            with tab_panel:
+                st.plotly_chart(source_series_figure(source_series, option), use_container_width=True)
+                start_date = source_series.loc[source_series[option["column"]].notna(), "date"].min()
+                end_date = source_series.loc[source_series[option["column"]].notna(), "date"].max()
+                if pd.notna(start_date) and pd.notna(end_date):
+                    st.caption(
+                        f"{option['source']} source signal, "
+                        f"{start_date:%b %Y} through {end_date:%b %Y}."
+                    )
+
+    mom_callouts = pre_covid_mom_callouts()
+    mom_callout_html = pre_covid_mom_callouts_html(mom_callouts)
+    if mom_callout_html:
+        st.markdown(mom_callout_html, unsafe_allow_html=True)
+
+    lagged_corr = lagged_upt_yoy_correlations()
+    if not lagged_corr.empty:
+        st.markdown(
+            """
+            <div class="eda-chart-panel">
+                <h4>Lagged relationships after reducing shared trend</h4>
+                <p>
+                    Because UPT and price indexes both tend to rise over long periods,
+                    raw level correlations can overstate the relationship. This view
+                    compares year-over-year changes instead, then tests whether each
+                    predictor's YoY movement leads UPT YoY movement by 0 to 12 months.
+                    CPI shows the strongest short-lag association, but that should be
+                    interpreted as a broad macro or regime signal rather than causal
+                    evidence that inflation mechanically increases ridership.
+                </p>
+                <p>
+                    Service measures are more mixed: they move with UPT at shorter lags,
+                    then fade or turn negative at longer lags. That pattern is useful for
+                    forecasting exploration, but still observational and potentially shaped
+                    by service planning, recovery timing, and COVID-era structural change.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(lagged_correlation_figure(lagged_corr), use_container_width=True)
+
+    corr_matrices = dashboard_correlation_matrices()
+    if corr_matrices:
+        st.markdown(
+            """
+            <div class="eda-chart-panel">
+                <h4>Correlation matrices after reducing time effects</h4>
+                <p>
+                    These Pearson correlation matrices compare transformed versions of
+                    the integrated data rather than raw levels. First differences show
+                    short-run movement, year-over-year percent changes compare growth
+                    against the same month one year earlier, and trend + month residuals
+                    show relationships after a simple time-trend and calendar-month
+                    adjustment. This reduces the chance that shared upward trends in
+                    series such as ridership and price indexes dominate the interpretation.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        matrix_tabs = st.tabs(list(corr_matrices.keys()))
+        for tab_panel, (title, matrix) in zip(matrix_tabs, corr_matrices.items()):
+            with tab_panel:
+                st.plotly_chart(correlation_heatmap_figure(matrix, title), use_container_width=True)
+
+    granger_screening = granger_predictive_screening()
+    if not granger_screening.empty:
+        st.markdown(
+            """
+            <div class="eda-chart-panel">
+                <h4>Granger-style predictive screening</h4>
+                <p>
+                    This screen asks whether past values of each YoY predictor improve
+                    prediction of UPT YoY beyond past UPT alone. The chart shows the
+                    strongest p-value found across one- to six-month lags for each
+                    predictor, so it should be read as a ranking of candidate signals,
+                    not as a formal causal result.
+                </p>
+                <p>
+                    In this pass, VRH, VOMS, and CPI measures surface as the clearest
+                    predictive candidates. Gas prices and VRM are weaker in this specific
+                    YoY lag test, even though they can still matter in other
+                    transformations or in the full rolling forecast models.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(granger_predictive_figure(granger_screening), use_container_width=True)
+
+    break_summary = covid_break_diagnostics()
+    if not break_summary.empty:
+        break_rows = break_summary.set_index("test")
+        stability_p = break_rows.loc["Coefficient stability break", "p_value"]
+        mean_p = break_rows.loc["Mean UPT YoY difference", "p_value"]
+        st.markdown(
+            f"""
+            <div class="eda-chart-panel">
+                <h4>COVID-era structural break diagnostics</h4>
+                <p>
+                    The H3 diagnostic regression predicts UPT YoY three months ahead
+                    from as-of-month YoY signals, target-month calendar effects, and a
+                    post-COVID indicator. A coefficient-stability test then compares
+                    whether that relationship looks the same before and after March 2020.
+                </p>
+                <p>
+                    The coefficient-stability result is extremely strong
+                    (<strong>p = {stability_p:.2g}</strong>), which supports treating
+                    COVID as a structural break in the modeling pipeline. The simpler
+                    pre/post mean comparison is not significant
+                    (<strong>p = {mean_p:.3f}</strong>), so the useful takeaway is not
+                    just that ridership visibly dropped, but that the relationship
+                    between ridership, service, prices, and seasonality changed.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    data_feature_cols = st.columns(2)
+    data_feature_cols[0].markdown(summary_panel_from_markdown(DATA_CALCULATED_FEATURES), unsafe_allow_html=True)
+    data_feature_cols[1].markdown(summary_panel_from_markdown(DATA_TIME_FEATURES), unsafe_allow_html=True)
+
     st.markdown("### Single Forecast Step Example")
     config_id = champion.get("model_config_id") or champion.get("config_id")
     sample = forecast_paths[forecast_paths["model_config_id"] == config_id].copy()
@@ -904,8 +2475,12 @@ def render_data_page(
             hide_index=True,
         )
 
+    render_data_availability_report()
+
 
 def render_experiment_page(
+    family_summary: pd.DataFrame,
+    feature_families: dict,
     leaderboard: pd.DataFrame,
     forecast_paths: pd.DataFrame,
     performance: pd.DataFrame,
@@ -966,6 +2541,8 @@ def render_experiment_page(
         unsafe_allow_html=True,
     )
 
+    render_feature_family_sections(family_summary, feature_families)
+
     st.markdown("### Feature Policies")
     st.write(
         "Feature families define the candidate inputs for a model. Feature "
@@ -996,6 +2573,113 @@ def render_experiment_page(
             }
         )
         st.table(policy_scope)
+    if "feature_transform" in leaderboard.columns:
+        st.markdown("### Feature Transforms")
+        st.write(
+            "Feature transforms describe the mathematical representation used after "
+            "a feature family and feature policy are chosen. They are kept separate "
+            "from feature families: the family answers what source signals are used, "
+            "while the transform answers how those selected signals are represented "
+            "for the model."
+        )
+        transform_scope = (
+            leaderboard.groupby(["feature_transform", "feature_transform_label"], dropna=False)
+            .size()
+            .reset_index(name="configurations")
+            .sort_values(["feature_transform_label"])
+        )
+        transform_scope["meaning"] = transform_scope["feature_transform"].map(
+            lambda transform: FEATURE_TRANSFORM_DESCRIPTIONS.get(
+                str(transform),
+                "Mathematical representation applied to the selected feature columns.",
+            )
+        )
+        transform_scope = transform_scope.rename(
+            columns={
+                "feature_transform_label": "Feature transform",
+                "configurations": "Configurations",
+                "meaning": "Meaning",
+            }
+        )[["Feature transform", "Configurations", "Meaning"]]
+        st.table(transform_scope)
+        st.markdown("#### How The Transform Families Are Implemented")
+        st.write(
+            "In this experiment bundle, transforms are broad representation tests. "
+            "A feature family first defines candidate source signals, the feature "
+            "policy selects or prunes columns inside each rolling training window, "
+            "and the transform family then expands those selected numeric columns. "
+            "Regularized models are scaled before fitting, so ridge, lasso, and "
+            "elastic net can shrink weak transformed terms, but the transform choice "
+            "itself is still applied consistently across the selected variables."
+        )
+        transform_detail_rows = [
+            {
+                "Transform family": "No transform",
+                "Terms created for each selected feature x": "x",
+                "Interpretation": "Baseline linear representation.",
+            },
+            {
+                "Transform family": "Signed log",
+                "Terms created for each selected feature x": "x; sign(x) * log1p(abs(x))",
+                "Interpretation": "Tests compressed scale effects while preserving negative values.",
+            },
+            {
+                "Transform family": "Quadratic",
+                "Terms created for each selected feature x": "x; x^2",
+                "Interpretation": "Tests curvature such as diminishing or accelerating effects.",
+            },
+            {
+                "Transform family": "Cubic",
+                "Terms created for each selected feature x": "x; x^2; x^3",
+                "Interpretation": "Tests asymmetric curvature; the quadratic term is included with the cubic term.",
+            },
+            {
+                "Transform family": "Signed log + quadratic + cubic",
+                "Terms created for each selected feature x": "x; sign(x) * log1p(abs(x)); x^2; x^3",
+                "Interpretation": "Stress-test representation that gives regularization several nonlinear shapes to choose from.",
+            },
+        ]
+        st.dataframe(pd.DataFrame(transform_detail_rows), use_container_width=True, hide_index=True)
+        st.info(
+            "The cubic transform is hierarchical in this run: a selected feature gets "
+            "the original value, the quadratic term, and the cubic term. It is not a "
+            "cubic-only model."
+        )
+        st.markdown("#### Modeling Implications")
+        st.write(
+            "These runs are useful for asking whether nonlinear representations are "
+            "worth exploring, but they are not yet variable-specific transform recipes. "
+            "For example, they do not test one model that uses a log transform for gas "
+            "prices, a quadratic term for service hours, and only the original scale "
+            "for CPI unless that combination happens to appear through a broader "
+            "all-selected-variable transform family and regularization."
+        )
+        st.write(
+            "A stronger next iteration would inspect transformed-variable correlations "
+            "and collinearity before modeling, then create source-aware transform "
+            "recipes. That would let the experiment compare targeted combinations "
+            "such as log gas-price movement, quadratic service capacity, and linear "
+            "inflation context against the broader all-variable transform grids."
+        )
+        strategy_rows = [
+            {
+                "Next-step idea": "Screen transformed candidates",
+                "Why it helps": "Compare correlations, VIF/collinearity, and rolling stability before expanding the model grid.",
+            },
+            {
+                "Next-step idea": "Use variable-specific transform recipes",
+                "Why it helps": "Allows log for one source signal and quadratic or cubic terms for another instead of applying every transform everywhere.",
+            },
+            {
+                "Next-step idea": "Keep hierarchy constraints",
+                "Why it helps": "When x^2 or x^3 is used, keep the original x term so nonlinear coefficients remain interpretable.",
+            },
+            {
+                "Next-step idea": "Compare targeted recipes to broad regularized grids",
+                "Why it helps": "Shows whether domain-guided transforms improve forecasts beyond relying on regularization to clean up a large expansion.",
+            },
+        ]
+        st.dataframe(pd.DataFrame(strategy_rows), use_container_width=True, hide_index=True)
     with st.expander("How feature, representation, and complexity policies are interpreted"):
         st.markdown(REPRESENTATION_AND_COMPLEXITY_EXPLANATION)
 
@@ -1049,10 +2733,435 @@ def render_experiment_page(
     st.markdown(experiment_overview_with_regime_note())
 
 
+def render_insights_page(
+    run_dir: Path,
+    leaderboard: pd.DataFrame,
+    forecast_paths: pd.DataFrame,
+    performance: pd.DataFrame,
+    champion: dict,
+    experiment_manifest: dict,
+) -> None:
+    st.subheader("Insights")
+    st.write(
+        "This page is the companion to Model Explorer. Model Explorer is built for "
+        "interactive filtering; Insights is built for directed interpretation of "
+        "what the experiment results suggest across model classes, feature choices, "
+        "time periods, and forecast failure modes."
+    )
+    notebook_status = "available" if RESULTS_INSIGHTS_NOTEBOOK_PATH.exists() else "planned"
+    st.caption(
+        f"Working notebook: `{RESULTS_INSIGHTS_NOTEBOOK_PATH}` ({notebook_status}). "
+        "The notebook is where exploratory result analysis can stay deeper and messier "
+        "before selected findings are promoted into this dashboard page."
+    )
+
+    bundle = experiment_manifest.get("public_dashboard_bundle", {})
+    full_config_count = bundle.get("source_configurations") or experiment_manifest.get("model_config_count") or len(leaderboard)
+    full_path_rows = bundle.get("full_path_rows", {})
+    full_forecast_rows = (
+        full_path_rows.get("forecast_paths")
+        if isinstance(full_path_rows, dict)
+        else experiment_manifest.get("prediction_count")
+    )
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Indexed configs", format_int(len(leaderboard)))
+    summary_cols[1].metric("Full source configs", format_int(full_config_count))
+    summary_cols[2].metric("On-demand forecast rows", format_int(full_forecast_rows or len(forecast_paths)))
+    summary_cols[3].metric("Champion", str(champion.get("model_build_label", champion.get("model_type", "-"))))
+
+    inquiry_rows = [
+        {
+            "Question": "Which models are robust across periods?",
+            "How this page/notebook investigates it": "Compare overall rank against pre-COVID, shock, recovery, and recent-period error.",
+        },
+        {
+            "Question": "Do nonlinear feature transforms help?",
+            "How this page/notebook investigates it": "Compare no-transform, signed-log, quadratic, cubic, and combined transforms within linear model builds.",
+        },
+        {
+            "Question": "Which feature policies are doing useful work?",
+            "How this page/notebook investigates it": "Compare none, correlation pruning, mutual information, and tree selectors across comparable model families.",
+        },
+        {
+            "Question": "Where do forecasts break down?",
+            "How this page/notebook investigates it": "Inspect residuals, large-error months, and error concentration by evaluation period.",
+        },
+    ]
+    st.markdown("### Directed Result Questions")
+    st.dataframe(pd.DataFrame(inquiry_rows), use_container_width=True, hide_index=True)
+
+    candidate_models = exclude_baseline_candidates(leaderboard)
+    score_col = "selection_score_balanced" if "selection_score_balanced" in candidate_models else "selection_score"
+    if not candidate_models.empty and score_col in candidate_models:
+        st.markdown("### COVID Shock Forecast Paths")
+        st.write(
+            "This chart fixes the Model Explorer view to one intentionally narrow "
+            "question: taking the best balanced-score configuration from each model "
+            "build, how did the forecast paths behave from immediately before the "
+            "COVID shock through the point where several models begin moving back "
+            "toward observed ridership?"
+        )
+        best_by_build = limit_configs_per_build(candidate_models, "Balanced score", "Top 1")
+        best_by_build = limit_total_configs(best_by_build, "Balanced score", "All")
+        best_configs = best_by_build["model_config_id"].astype(str).tolist()
+        shock_paths = load_forecast_rows_for_configs(run_dir, best_by_build, best_configs)
+        shock_paths = apply_date_window(
+            shock_paths,
+            "target_date",
+            pd.Timestamp("2020-01-01").date(),
+            pd.Timestamp("2021-05-01").date(),
+        )
+        selected_shock_models, shock_chart_paths, duplicate_count = select_distinct_model_paths(
+            best_by_build,
+            shock_paths,
+            max_models=25,
+        )
+        if shock_chart_paths.empty:
+            st.info("No forecast paths were found for the fixed COVID shock window.")
+        else:
+            st.plotly_chart(
+                top_model_chart(shock_chart_paths, "Best Model-Build Paths During COVID Shock"),
+                use_container_width=True,
+            )
+            st.caption(
+                "Selection: non-baseline model configurations only; top one per model build by balanced score. "
+                "The dashed orange line is the seasonal-naive reference, while the thick black line is actual UPT. "
+                "The spread in 2020 shows how differently model families reacted to an abrupt structural break; "
+                "the convergence by early 2021 is a useful clue for comparing shock handling against recovery behavior."
+            )
+            if duplicate_count:
+                st.caption(
+                    f"Skipped {duplicate_count} duplicate prediction path(s) so the chart emphasizes distinct lines."
+                )
+            render_metric_dataframe(
+                overview_table(selected_shock_models.head(25)),
+                max_rows=25,
+                max_visible_rows=25,
+            )
+
+        st.markdown("#### Top 10 Overall Models In The Same Window")
+        st.write(
+            "The companion view removes the per-build diversity rule and asks a more "
+            "leaderboard-like question: among the top 10 non-baseline configurations "
+            "overall, how similar are their shock-period paths?"
+        )
+        top10_overall = limit_total_configs(candidate_models, "Balanced score", "Top 10")
+        top10_configs = top10_overall["model_config_id"].astype(str).tolist()
+        top10_paths = load_forecast_rows_for_configs(run_dir, top10_overall, top10_configs)
+        top10_paths = apply_date_window(
+            top10_paths,
+            "target_date",
+            pd.Timestamp("2020-01-01").date(),
+            pd.Timestamp("2021-05-01").date(),
+        )
+        selected_top10_models, top10_chart_paths, top10_duplicate_count = select_distinct_model_paths(
+            top10_overall,
+            top10_paths,
+            max_models=10,
+        )
+        if top10_chart_paths.empty:
+            st.info("No top-10 forecast paths were found for the fixed COVID shock window.")
+        else:
+            st.plotly_chart(
+                top_model_chart(top10_chart_paths, "Top 10 Overall Paths During COVID Shock"),
+                use_container_width=True,
+            )
+            st.caption(
+                "Selection: top 10 non-baseline configurations by balanced score, regardless of model build. "
+                "If these paths cluster tightly, the leaderboard is pointing toward a shared modeling strategy; "
+                "if they diverge, similar aggregate scores may be hiding different shock-period behavior."
+            )
+            if top10_duplicate_count:
+                st.caption(
+                    f"Skipped {top10_duplicate_count} duplicate prediction path(s) so the chart emphasizes distinct lines."
+                )
+            render_metric_dataframe(
+                overview_table(selected_top10_models.head(10)),
+                max_rows=10,
+                max_visible_rows=10,
+            )
+
+        xgboost_count = int(top10_overall["model_build"].astype(str).eq("xgboost").sum()) if "model_build" in top10_overall else 0
+        st.markdown("### Why XGBoost Is A Plausible Front-Runner")
+        st.write(
+            "The current leaderboard suggests that XGBoost is not merely winning because it is a tree model. "
+            "It is likely benefiting from the combination of boosted shallow trees, regularization, and wide "
+            "feature families that include lagged history, regime indicators, time context, and targeted interactions."
+        )
+        if not top10_overall.empty:
+            st.caption(
+                f"In the current top-10 balanced-score slice, {xgboost_count} of "
+                f"{len(top10_overall)} configurations are XGBoost."
+            )
+        xgb_rows = [
+            {
+                "Likely contributor": "Boosting learns sequential corrections",
+                "Why it matters here": "A random forest averages independent trees; boosting can fit residual structure left by earlier trees, which is useful when ordinary seasonality breaks.",
+                "Follow-up test": "Compare XGBoost to sklearn gradient boosting / histogram gradient boosting under matched feature sets.",
+            },
+            {
+                "Likely contributor": "Nonlinear interactions without manual recipes",
+                "Why it matters here": "The strongest feature families contain regime, service, time, and interaction signals. Boosted trees can choose thresholds and combinations without requiring explicit linear terms.",
+                "Follow-up test": "Run XGBoost with interaction-heavy families removed, then with only compact history/regime families.",
+            },
+            {
+                "Likely contributor": "Regularized incremental fit",
+                "Why it matters here": "Learning rate, tree depth, subsampling, and child-weight constraints can make XGBoost flexible without letting every noisy feature dominate.",
+                "Follow-up test": "Ablate learning rate, depth, subsample, colsample, and min_child_weight while holding the feature family constant.",
+            },
+            {
+                "Likely contributor": "Feature-policy alignment",
+                "Why it matters here": "Tree-top feature policies may pair especially well with XGBoost because the selector and final model both favor split-based nonlinear signal.",
+                "Follow-up test": "Compare `none`, `tree_top_30`, mutual information, and correlation pruning within XGBoost and Random Forest on the same families.",
+            },
+        ]
+        st.dataframe(pd.DataFrame(xgb_rows), use_container_width=True, hide_index=True)
+        st.info(
+            "A follow-up experiment is worth planning, but it should be framed as an ablation. "
+            "Adding more random-forest variants can test whether the gap is just tree capacity, "
+            "but it will not reproduce the central XGBoost ingredient: sequential gradient boosting. "
+            "The cleaner comparison is a matched tree-family study: tuned Random Forest and Extra Trees, "
+            "gradient-boosted trees, and XGBoost ablations across the same feature families and scoring windows."
+        )
+
+    if not candidate_models.empty and score_col in candidate_models:
+        build_summary = (
+            candidate_models.groupby(["model_family", "model_build", "model_build_label"], dropna=False)
+            .agg(
+                configurations=("config_id", "nunique"),
+                best_balanced_score=(score_col, "min"),
+                median_balanced_score=(score_col, "median"),
+                best_mae=("mae", "min"),
+                best_rmse=("rmse", "min"),
+                best_r2=("r2", "max"),
+            )
+            .reset_index()
+        )
+        build_summary = model_taxonomy_sort(build_summary).sort_values("best_balanced_score")
+        st.markdown("### First-Pass Model Build Summary")
+        st.write(
+            "This is a compact starting point for the deeper notebook analysis: one row "
+            "per model build, ranked by the best balanced score found in the current "
+            "dashboard artifact bundle."
+        )
+        fig = px.bar(
+            build_summary.sort_values("best_balanced_score", ascending=True),
+            x="best_balanced_score",
+            y="model_build_label",
+            color="model_family",
+            orientation="h",
+            labels={
+                "best_balanced_score": "Best balanced score",
+                "model_build_label": "Model build",
+                "model_family": "Model family",
+            },
+            hover_data=["configurations", "best_mae", "best_rmse", "best_r2"],
+        )
+        fig.update_layout(
+            height=max(380, 34 * len(build_summary) + 90),
+            margin={"l": 170, "r": 30, "t": 35, "b": 45},
+            template="plotly_white",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            font={"color": "#2f323a"},
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        render_metric_dataframe(
+            build_summary[
+                [
+                    "model_build_label",
+                    "model_family",
+                    "configurations",
+                    "best_balanced_score",
+                    "median_balanced_score",
+                    "best_mae",
+                    "best_rmse",
+                    "best_r2",
+                ]
+            ],
+            max_rows=50,
+        )
+
+    if not candidate_models.empty and {"model_family", "feature_transform_label", score_col}.issubset(candidate_models.columns):
+        linear_models = candidate_models[candidate_models["model_family"] == "linear"].copy()
+        if not linear_models.empty:
+            transform_summary = (
+                linear_models.groupby(["model_build_label", "feature_transform", "feature_transform_label"], dropna=False)
+                .agg(
+                    configurations=("config_id", "nunique"),
+                    best_balanced_score=(score_col, "min"),
+                    median_balanced_score=(score_col, "median"),
+                    best_mae=("mae", "min"),
+                    best_rmse=("rmse", "min"),
+                )
+                .reset_index()
+            )
+            transform_summary["_transform_order"] = transform_summary["feature_transform"].map(
+                lambda value: order_index(str(value), FEATURE_TRANSFORM_ORDER)[0]
+            )
+            transform_summary = transform_summary.sort_values(
+                ["model_build_label", "_transform_order", "best_balanced_score"]
+            ).drop(columns=["_transform_order", "feature_transform"])
+            st.markdown("### Linear Transform Screening")
+            st.write(
+                "This first-pass table compares transform families inside the regularized "
+                "linear models. It is a screening view, not yet a conclusion about which "
+                "variables should receive which transform. No transform is the untransformed "
+                "baseline and is shown first for each model build. Non-identity transform "
+                "families keep the original selected features and append transformed terms."
+            )
+            lasso_rows = linear_models[linear_models["model_build"].astype(str).eq("lasso")]
+            if not lasso_rows.empty and set(lasso_rows["feature_transform"].dropna().astype(str)) == {"identity"}:
+                st.info(
+                    "Lasso appears with No transform only in the current dashboard bundle. "
+                    "The transform code supports lasso, but the merged nonlinear follow-up "
+                    "did not add transformed lasso configurations; those would need a targeted "
+                    "rerun if we want a direct lasso transform comparison."
+                )
+            render_metric_dataframe(transform_summary, max_rows=75, max_visible_rows=15)
+
+    period_cols = [
+        ("Pre-COVID", "pre_covid_mae"),
+        ("COVID shock", "covid_shock_mae"),
+        ("Recovery", "recovery_mae"),
+        ("Recent", "recent_mae"),
+    ]
+    if not candidate_models.empty and all(col in candidate_models for _, col in period_cols):
+        period_rows = []
+        for label, column in period_cols:
+            best_mae = candidate_models[column].min()
+            median_mae = candidate_models[column].median()
+            improvement = safe_ratio(median_mae - best_mae, median_mae)
+            period_rows.append(
+                {
+                    "Period": label,
+                    "Best MAE": best_mae,
+                    "Median MAE": median_mae,
+                    "Best vs median improvement": f"{improvement:.1%}" if pd.notna(improvement) else "-",
+                }
+            )
+        st.markdown("### Period Difficulty Snapshot")
+        st.write(
+            "A useful result-inspection habit is to separate the global leaderboard "
+            "from period-specific behavior. This snapshot starts that comparison by "
+            "showing the best and median MAE by evaluation period, plus how much the "
+            "best configuration improves on the typical configuration in that period."
+        )
+        st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+
+
 @st.cache_data(show_spinner=False)
 def load_parquet(path: str, modified_ns: int) -> pd.DataFrame:
     _ = modified_ns
     return pd.read_parquet(path)
+
+
+def safe_partition_value(value) -> str:
+    text = "unknown" if pd.isna(value) else str(value)
+    safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in text)
+    return safe.strip("_") or "unknown"
+
+
+def model_id_column(df: pd.DataFrame) -> str:
+    if "model_config_id" in df.columns:
+        return "model_config_id"
+    if "config_id" in df.columns:
+        return "config_id"
+    raise KeyError("Expected either model_config_id or config_id.")
+
+
+def path_collection_modified_ns(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_mtime_ns
+    return max((file.stat().st_mtime_ns for file in path.rglob("*.parquet")), default=path.stat().st_mtime_ns)
+
+
+def path_partition_files(dataset_dir: Path, model_builds: tuple[str, ...]) -> list[Path]:
+    if not dataset_dir.exists():
+        return []
+    if model_builds:
+        files = []
+        for build in model_builds:
+            files.extend((dataset_dir / f"model_build={safe_partition_value(build)}").glob("*.parquet"))
+        return sorted(path for path in files if path.exists())
+    return sorted(dataset_dir.glob("**/*.parquet"))
+
+
+@st.cache_data(show_spinner=False)
+def load_path_rows_for_configs(
+    run_dir: str,
+    dataset_name: str,
+    config_ids: tuple[str, ...],
+    model_builds: tuple[str, ...],
+    modified_ns: int,
+) -> pd.DataFrame:
+    _ = modified_ns
+    if not config_ids:
+        return pd.DataFrame()
+
+    run_path = Path(run_dir)
+    dataset_dir = run_path / PATH_DATASET_DIRS[dataset_name]
+    files = path_partition_files(dataset_dir, model_builds)
+    config_values = [str(config_id) for config_id in config_ids]
+
+    if files and pl is not None:
+        lazy_frames = [pl.scan_parquet(str(path)) for path in files]
+        lazy = lazy_frames[0] if len(lazy_frames) == 1 else pl.concat(lazy_frames, how="diagonal_relaxed")
+        columns = set(lazy.collect_schema().names())
+        id_col = "model_config_id" if "model_config_id" in columns else "config_id"
+        filtered = lazy.filter(pl.col(id_col).cast(pl.Utf8).is_in(config_values))
+        return filtered.collect().to_pandas()
+
+    if files:
+        frames = []
+        for path in files:
+            frame = pd.read_parquet(path)
+            id_col = model_id_column(frame)
+            frames.append(frame[frame[id_col].astype(str).isin(config_values)])
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    fallback_path = run_path / REQUIRED_FILES[dataset_name]
+    if fallback_path.exists():
+        frame = load_parquet(str(fallback_path), file_modified_ns(fallback_path))
+        id_col = model_id_column(frame)
+        return frame[frame[id_col].astype(str).isin(config_values)].copy()
+    return pd.DataFrame()
+
+
+def load_forecast_rows_for_configs(
+    run_dir: Path,
+    ranked_models: pd.DataFrame,
+    config_ids: list[str],
+) -> pd.DataFrame:
+    builds = tuple(sorted(ranked_models["model_build"].dropna().astype(str).unique())) if "model_build" in ranked_models else ()
+    dataset_path = run_dir / PATH_DATASET_DIRS["forecast_paths"]
+    loaded = load_path_rows_for_configs(
+        str(run_dir),
+        "forecast_paths",
+        tuple(str(config_id) for config_id in config_ids),
+        builds,
+        path_collection_modified_ns(dataset_path if dataset_path.exists() else run_dir / REQUIRED_FILES["forecast_paths"]),
+    )
+    return ensure_model_taxonomy(normalize_dates(loaded, ["as_of_date", "target_date"]))
+
+
+def load_performance_rows_for_configs(
+    run_dir: Path,
+    ranked_models: pd.DataFrame,
+    config_ids: list[str],
+) -> pd.DataFrame:
+    builds = tuple(sorted(ranked_models["model_build"].dropna().astype(str).unique())) if "model_build" in ranked_models else ()
+    dataset_path = run_dir / PATH_DATASET_DIRS["performance_over_time"]
+    loaded = load_path_rows_for_configs(
+        str(run_dir),
+        "performance_over_time",
+        tuple(str(config_id) for config_id in config_ids),
+        builds,
+        path_collection_modified_ns(dataset_path if dataset_path.exists() else run_dir / REQUIRED_FILES["performance_over_time"]),
+    )
+    return ensure_model_taxonomy(normalize_dates(loaded, ["as_of_date", "target_date"]))
 
 
 @st.cache_data(show_spinner=False)
@@ -1252,9 +3361,26 @@ def styled_metric_table(frame: pd.DataFrame):
     return frame.style.apply(apply_styles, axis=None).set_table_styles(table_styles)
 
 
-def render_metric_dataframe(frame: pd.DataFrame, max_rows: int = None) -> None:
+def dataframe_height_for_rows(row_count: int, max_visible_rows: int = 12) -> int:
+    visible_rows = min(max(row_count, 1), max_visible_rows)
+    return 39 + visible_rows * 35
+
+
+def render_metric_dataframe(
+    frame: pd.DataFrame,
+    max_rows: int = None,
+    max_visible_rows: int = None,
+) -> None:
     display = frame.head(max_rows) if max_rows is not None else frame
-    st.dataframe(styled_metric_table(display), hide_index=True, use_container_width=True)
+    dataframe_kwargs = {}
+    if max_visible_rows is not None:
+        dataframe_kwargs["height"] = dataframe_height_for_rows(len(display), max_visible_rows)
+    st.dataframe(
+        styled_metric_table(display),
+        hide_index=True,
+        use_container_width=True,
+        **dataframe_kwargs,
+    )
 
 
 def date_range_label(df: pd.DataFrame, column: str) -> str:
@@ -1299,6 +3425,13 @@ def ensure_model_taxonomy(df: pd.DataFrame) -> pd.DataFrame:
             out["model_build"] = out["model_type"].map(model_build_for)
     if "model_config_id" not in out and "config_id" in out:
         out["model_config_id"] = out["config_id"]
+    if "feature_transform" not in out:
+        out["feature_transform"] = "identity"
+    else:
+        out["feature_transform"] = out["feature_transform"].fillna("identity")
+    out["feature_transform_label"] = out["feature_transform"].map(
+        lambda value: FEATURE_TRANSFORM_LABELS.get(str(value), str(value).replace("_", " ").title())
+    )
     if {"model_family", "model_build"}.issubset(out.columns):
         out["model_build_label"] = [
             model_build_display_label(family, build)
@@ -1383,6 +3516,7 @@ def filtered_frame(
     mode="All",
     feature_family="All",
     feature_policy="All",
+    feature_transform="All",
 ) -> pd.DataFrame:
     out = apply_optional_value_filter(df, "model_build_label", model_build_label)
     out = apply_optional_value_filter(out, "model_family", model_family)
@@ -1390,6 +3524,7 @@ def filtered_frame(
     out = apply_optional_value_filter(out, "mode", mode)
     out = apply_optional_value_filter(out, "feature_family_name", feature_family)
     out = apply_optional_value_filter(out, "feature_policy", feature_policy)
+    out = apply_optional_value_filter(out, "feature_transform_label", feature_transform)
     return out
 
 
@@ -1712,9 +3847,11 @@ def ranked_model_label(row: pd.Series, metric_label: str) -> str:
         "model_build_label",
         model_build_display_label(row.get("model_family", ""), row.get("model_build", row.get("model_type", "model"))),
     )
+    transform_label = row.get("feature_transform_label", FEATURE_TRANSFORM_LABELS.get("identity", "No transform"))
     return (
         f"#{int(row['rank'])} | {build_label} "
         f"| {row.get('mode', '-')} | {row.get('feature_family_name', '-')} "
+        f"| {transform_label} "
         f"| {metric_fragment} | MAE {format_int(row.get('mae'))} "
         f"| RMSE {format_int(row.get('rmse'))} | {params}"
     )
@@ -1759,7 +3896,8 @@ def top_model_chart(paths: pd.DataFrame, title: str) -> go.Figure:
         first = group.iloc[0]
         label = (
             f"#{int(first['rank'])} {first.get('model_build_label', first.get('model_build', first.get('model_type', 'model')))} | "
-            f"{first.get('feature_family_name', '-')}"
+            f"{first.get('feature_family_name', '-')} | "
+            f"{first.get('feature_transform_label', 'No transform')}"
         )
         fig.add_trace(
             go.Scatter(
@@ -1856,6 +3994,7 @@ def overview_table(top_models: pd.DataFrame) -> pd.DataFrame:
         "rank",
         "model_build_label",
         "feature_family_name",
+        "feature_transform_label",
         "mode",
         "feature_policy",
         "hyperparameters",
@@ -1895,6 +4034,7 @@ def forecast_ranked_table(ranked_models: pd.DataFrame) -> pd.DataFrame:
         "model_build_label",
         "mode",
         "feature_family_name",
+        "feature_transform_label",
         "feature_policy",
         "hyperparameters",
         "mae",
@@ -1932,12 +4072,19 @@ def metric_mapping_frame(
     model_build_labels: list[str],
     rank_label: str,
     per_build_limit: str,
+    total_limit: str = "All",
+    feature_families: Optional[list[str]] = None,
+    feature_policies: Optional[list[str]] = None,
+    feature_transforms: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     if not model_build_labels:
         return leaderboard.iloc[0:0].copy()
     frame = leaderboard[leaderboard["model_build_label"].astype(str).isin(model_build_labels)].copy()
+    frame = apply_optional_multi_filter(frame, "feature_family_name", feature_families or [])
+    frame = apply_optional_multi_filter(frame, "feature_policy", feature_policies or [])
+    frame = apply_optional_multi_filter(frame, "feature_transform_label", feature_transforms or [])
     if per_build_limit == "All":
-        return frame
+        return limit_total_configs(frame, rank_label, total_limit)
 
     limit = int(per_build_limit.replace("Top ", ""))
     ranked_slices = []
@@ -1945,7 +4092,8 @@ def metric_mapping_frame(
         ranked_slices.append(sort_by_rank_metric(group, rank_label).head(limit))
     if not ranked_slices:
         return frame.iloc[0:0].copy()
-    return pd.concat(ranked_slices, ignore_index=True)
+    limited = pd.concat(ranked_slices, ignore_index=True)
+    return limit_total_configs(limited, rank_label, total_limit)
 
 
 def limit_configs_per_build(frame: pd.DataFrame, rank_label: str, per_build_limit: str) -> pd.DataFrame:
@@ -1960,6 +4108,13 @@ def limit_configs_per_build(frame: pd.DataFrame, rank_label: str, per_build_limi
         return frame.iloc[0:0].copy()
     limited = pd.concat(ranked_slices, ignore_index=True)
     return sort_by_rank_metric(limited, rank_label)
+
+
+def limit_total_configs(frame: pd.DataFrame, rank_label: str, total_limit: str) -> pd.DataFrame:
+    if frame.empty or total_limit == "All":
+        return frame
+    limit = int(total_limit.replace("Top ", ""))
+    return sort_by_rank_metric(frame, rank_label).head(limit)
 
 
 def average_forecast_paths_by_build(paths: pd.DataFrame, ranked_models: pd.DataFrame) -> pd.DataFrame:
@@ -2048,6 +4203,7 @@ def aggregate_metric_mapping(frame: pd.DataFrame, x_metric: str, y_metric: str) 
     summary = summary.merge(counts, on=group_cols, how="left")
     summary["feature_family_name"] = "average of selected slice"
     summary["feature_policy"] = "mixed"
+    summary["feature_transform_label"] = "mixed"
     return summary
 
 
@@ -2057,6 +4213,7 @@ def metric_mapping_hover_columns(frame: pd.DataFrame) -> list[str]:
         "model_build_label",
         "model_build",
         "feature_family_name",
+        "feature_transform_label",
         "feature_policy",
         "mode",
         "mae",
@@ -2113,6 +4270,7 @@ def metric_mapping_chart(
             "model_build_label": "Model build",
             "model_build": "Model build",
             "feature_policy": "Feature policy",
+            "feature_transform_label": "Feature transform",
         },
     )
     fig.update_traces(marker=dict(opacity=0.78, line=dict(width=0.5, color="white")))
@@ -2159,8 +4317,10 @@ def main() -> None:
     performance = ensure_model_taxonomy(
         normalize_dates(artifacts["performance_over_time"], ["as_of_date", "target_date"])
     )
-    leaderboard = enrich_score_columns(ensure_model_taxonomy(artifacts["model_leaderboard"]))
-    family_summary = artifacts["feature_family_summary"].copy()
+    curated_leaderboard = enrich_score_columns(ensure_model_taxonomy(artifacts["model_leaderboard"]))
+    leaderboard_source = artifacts.get("model_leaderboard_full", artifacts["model_leaderboard"])
+    leaderboard = enrich_score_columns(ensure_model_taxonomy(leaderboard_source))
+    family_summary = artifacts.get("feature_family_summary_full", artifacts["feature_family_summary"]).copy()
     champion_predictions = normalize_dates(artifacts["champion_predictions"], ["as_of_date", "target_date"])
     champion = artifacts["champion_selection"]
     experiment_manifest = artifacts.get("experiment_manifest", {})
@@ -2194,23 +4354,26 @@ def main() -> None:
     render_project_banner()
     render_dashboard_header(champion, forecast_paths, experiment_manifest)
 
-    (
-        tab_project_overview,
-        tab_data,
-        tab_system,
-        tab_experiment,
-        tab_modeling_overview,
-    ) = st.tabs(
-        [
-            "Project Overview",
-            "Data",
-            "System",
-            "Experiment",
-            "Model Explorer",
-        ]
+    section_options = [
+        "Project Overview",
+        "Data",
+        "System",
+        "Experiment",
+        "Model Explorer",
+        "Insights",
+    ]
+    active_section = st.segmented_control(
+        "Dashboard section",
+        section_options,
+        default=section_options[0],
+        key="dashboard_section",
+        label_visibility="collapsed",
+        width="stretch",
     )
+    if active_section is None:
+        active_section = section_options[0]
 
-    with tab_project_overview:
+    if active_section == "Project Overview":
         overview_intro_cols = st.columns(2)
         overview_intro_cols[0].markdown(PROJECT_OVERVIEW_CASE_STUDY)
         overview_intro_cols[1].markdown(PROJECT_OVERVIEW_SYSTEM)
@@ -2219,7 +4382,6 @@ def main() -> None:
 
         bundle = experiment_manifest.get("public_dashboard_bundle", {})
         full_config_count = bundle.get("source_configurations") or experiment_manifest.get("model_config_count") or len(leaderboard)
-        displayed_config_count = bundle.get("selected_configurations") or len(leaderboard)
         full_prediction_count = experiment_manifest.get("prediction_count") or len(forecast_paths)
         displayed_prediction_count = len(forecast_paths)
 
@@ -2229,15 +4391,15 @@ def main() -> None:
             f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months",
         )
         overview_cols[1].metric("Full Model Configs", format_int(full_config_count))
-        overview_cols[2].metric("Displayed Configs", format_int(displayed_config_count))
+        overview_cols[2].metric("Indexed Configs", format_int(len(leaderboard)))
         overview_cols[3].metric("Full Rolling Predictions", format_int(full_prediction_count))
-        overview_cols[4].metric("Displayed Predictions", format_int(displayed_prediction_count))
+        overview_cols[4].metric("Flat Path Predictions", format_int(displayed_prediction_count))
         overview_cols[5].metric("Target Window", date_range_label(forecast_paths, "target_date"))
 
-    with tab_data:
+    elif active_section == "Data":
         render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
 
-    with tab_system:
+    elif active_section == "System":
         system_cols = st.columns(2)
         system_cols[0].markdown(SYSTEM_ARCHITECTURE)
         system_cols[1].markdown(SYSTEM_REASONING)
@@ -2260,9 +4422,12 @@ def main() -> None:
                 "running through ECS Fargate tasks."
             ),
         )
+        render_system_artifact_flow(experiment_manifest, len(forecast_paths))
 
-    with tab_experiment:
+    elif active_section == "Experiment":
         render_experiment_page(
+            family_summary,
+            feature_families,
             leaderboard,
             forecast_paths,
             performance,
@@ -2273,7 +4438,7 @@ def main() -> None:
             phase_c_config_text,
         )
 
-    with tab_modeling_overview:
+    elif active_section == "Model Explorer":
         render_champion_snapshot(champion, forecast_paths, experiment_manifest)
         st.subheader("Top Models Against Actual Ridership")
         filter_cols = st.columns([2.1, 1.0, 1.2])
@@ -2296,7 +4461,7 @@ def main() -> None:
             key="overview_metric",
         )
         mode_scope = apply_optional_filter(build_scope, "mode", selected_mode)
-        filter_cols_secondary = st.columns([2.0, 1.4, 1.0, 1.2])
+        filter_cols_secondary = st.columns([1.7, 1.15, 1.25, 0.9, 0.9, 1.1])
         selected_feature_families = optional_multiselect(
             "Feature families",
             mode_scope["feature_family_name"],
@@ -2310,13 +4475,27 @@ def main() -> None:
             "overview_feature_policies",
             filter_cols_secondary[1],
         )
-        overview_per_build_limit = filter_cols_secondary[2].selectbox(
+        policy_scope = apply_optional_multi_filter(feature_scope, "feature_policy", selected_feature_policies)
+        selected_feature_transforms = optional_multiselect(
+            "Feature transforms",
+            policy_scope["feature_transform_label"],
+            "overview_feature_transforms",
+            filter_cols_secondary[2],
+        )
+        overview_per_build_limit = filter_cols_secondary[3].selectbox(
             "Configs per build",
-            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            PER_BUILD_LIMIT_OPTIONS,
             index=0,
             key="overview_per_build_limit",
         )
-        overview_path_mode = filter_cols_secondary[3].selectbox(
+        overview_total_limit = filter_cols_secondary[4].selectbox(
+            "Top total",
+            TOTAL_LIMIT_OPTIONS,
+            index=0,
+            key="overview_total_limit",
+            help="Applies after the per-build cap. For example, use Top 3 per build and Top 15 total.",
+        )
+        overview_path_mode = filter_cols_secondary[5].selectbox(
             "Path mode",
             ["Each configuration", "Average by model build"],
             key="overview_path_mode",
@@ -2327,14 +4506,16 @@ def main() -> None:
             mode=selected_mode,
             feature_family=selected_feature_families,
             feature_policy=selected_feature_policies,
+            feature_transform=selected_feature_transforms,
         )
         metric = RANK_METRIC_OPTIONS[metric_label][0]
         if metric in filtered_top:
             filtered_top = sort_by_rank_metric(filtered_top, metric_label).copy()
         filtered_top = limit_configs_per_build(filtered_top, metric_label, overview_per_build_limit)
+        filtered_top = limit_total_configs(filtered_top, metric_label, overview_total_limit)
 
         candidate_configs = filtered_top["model_config_id"].tolist()
-        chart_paths = forecast_paths[forecast_paths["model_config_id"].isin(candidate_configs)].copy()
+        chart_paths = load_forecast_rows_for_configs(selected_dir, filtered_top, candidate_configs)
         target_min, target_max = date_bounds(chart_paths if not chart_paths.empty else forecast_paths, "target_date")
         default_target_start, default_target_end = default_target_window_for_rank(
             metric_label,
@@ -2367,7 +4548,10 @@ def main() -> None:
             chart_paths = average_forecast_paths_by_build(windowed_paths, filtered_top)
             duplicate_count = 0
         else:
-            max_paths = 25 if overview_per_build_limit != "All" else 10
+            if overview_total_limit == "All":
+                max_paths = 25 if overview_per_build_limit != "All" else 10
+            else:
+                max_paths = int(overview_total_limit.replace("Top ", ""))
             selected_models, chart_paths, duplicate_count = select_distinct_model_paths(
                 filtered_top,
                 windowed_paths,
@@ -2406,7 +4590,9 @@ def main() -> None:
 
         st.subheader("Rolling Error Over Time")
         rolling_date_cols = st.columns([1, 1, 2])
-        overview_as_of_min, overview_as_of_max = date_bounds(performance, "as_of_date")
+        rolling_configs = filtered_top["config_id"].tolist()
+        rolling_subset = load_performance_rows_for_configs(selected_dir, filtered_top, rolling_configs)
+        overview_as_of_min, overview_as_of_max = date_bounds(rolling_subset if not rolling_subset.empty else performance, "as_of_date")
         overview_as_of_start = rolling_date_cols[0].date_input(
             "As-of start",
             overview_as_of_min.date(),
@@ -2421,8 +4607,6 @@ def main() -> None:
             max_value=overview_as_of_max.date(),
             key="overview_rolling_as_of_end",
         )
-        rolling_configs = filtered_top["config_id"].tolist()
-        rolling_subset = performance[performance["config_id"].isin(rolling_configs)].copy()
         rolling_subset = apply_date_window(
             rolling_subset,
             "as_of_date",
@@ -2502,11 +4686,16 @@ def main() -> None:
             detail_config_id = dict(zip(detail_labels, detail_candidates["config_id"]))[selected_detail_label]
             detail_model = detail_candidates[detail_candidates["config_id"] == detail_config_id].iloc[0]
             st.caption(
+                f"Feature transform: {detail_model.get('feature_transform_label', 'No transform')}. "
                 "Hyperparameters: "
                 f"{parse_json_display(detail_model.get('hyperparameters_json', '{}'))}. "
                 f"Table follows the selected model over the active target-date window."
             )
-            detail_forecast = forecast_paths[forecast_paths["config_id"] == detail_config_id].copy()
+            detail_forecast = load_forecast_rows_for_configs(
+                selected_dir,
+                detail_candidates[detail_candidates["config_id"] == detail_config_id],
+                [detail_config_id],
+            )
             detail_forecast = detail_forecast.sort_values("target_date")
             detail_forecast = apply_date_window(
                 detail_forecast,
@@ -2539,7 +4728,7 @@ def main() -> None:
         )
         metric_options = available_rank_options(leaderboard)
         build_options = ordered_model_build_labels(candidate_leaderboard)
-        control_cols = st.columns([1, 1, 1, 1, 1])
+        control_cols = st.columns([1.25, 1.25, 1.15, 0.9, 0.9, 1.1])
         x_metric = control_cols[0].selectbox(
             "X axis",
             metric_options,
@@ -2560,11 +4749,18 @@ def main() -> None:
         )
         per_build_limit = control_cols[3].selectbox(
             "Configs per build",
-            ["Top 1", "Top 5", "Top 10", "Top 25", "All"],
+            PER_BUILD_LIMIT_OPTIONS,
             index=1,
             key="mapping_per_build_limit",
         )
-        point_mode = control_cols[4].selectbox(
+        total_limit = control_cols[4].selectbox(
+            "Top total",
+            TOTAL_LIMIT_OPTIONS,
+            index=0,
+            key="mapping_total_limit",
+            help="Applies after the per-build cap.",
+        )
+        point_mode = control_cols[5].selectbox(
             "Point mode",
             ["Each configuration", "Average by model build"],
             key="mapping_point_mode",
@@ -2575,9 +4771,40 @@ def main() -> None:
             default=build_options,
             key="mapping_model_builds",
         )
-        color_by = st.selectbox(
+        mapping_filter_cols = st.columns([1.35, 1.1, 1.1, 0.9])
+        selected_mapping_families = optional_multiselect(
+            "Feature families",
+            candidate_leaderboard["feature_family_name"],
+            "mapping_feature_families",
+            mapping_filter_cols[0],
+        )
+        mapping_family_scope = apply_optional_multi_filter(
+            candidate_leaderboard,
+            "feature_family_name",
+            selected_mapping_families,
+        )
+        selected_mapping_policies = optional_multiselect(
+            "Feature policies",
+            mapping_family_scope["feature_policy"],
+            "mapping_feature_policies",
+            mapping_filter_cols[1],
+        )
+        mapping_policy_scope = apply_optional_multi_filter(
+            mapping_family_scope,
+            "feature_policy",
+            selected_mapping_policies,
+        )
+        selected_mapping_transforms = mapping_filter_cols[2].multiselect(
+            "Feature transforms",
+            ordered_unique(mapping_policy_scope["feature_transform_label"]),
+            default=[],
+            key="mapping_feature_transforms",
+            placeholder="All",
+            help="Leave empty to include all transforms.",
+        )
+        color_by = mapping_filter_cols[3].selectbox(
             "Color by",
-            ["model_family", "model_build", "feature_policy", "mode"],
+            ["model_family", "model_build", "feature_transform_label", "feature_policy", "mode"],
             key="mapping_color_by",
         )
 
@@ -2586,6 +4813,10 @@ def main() -> None:
             selected_builds,
             rank_metric,
             per_build_limit,
+            total_limit,
+            selected_mapping_families,
+            selected_mapping_policies,
+            selected_mapping_transforms,
         )
         aggregate_points = point_mode == "Average by model build"
         if aggregate_points and not mapping_frame.empty:
@@ -2611,6 +4842,7 @@ def main() -> None:
             table_cols = [
                 "model_build_label",
                 "mode",
+                "feature_transform_label",
                 "feature_policy",
                 "feature_family_name",
                 "configurations",
@@ -2673,6 +4905,16 @@ def main() -> None:
         st.markdown("**Loaded Artifacts**")
         st.code(str(selected_dir), language="text")
         st.write("This app reads curated dashboard artifacts only. It does not trigger training jobs.")
+
+    elif active_section == "Insights":
+        render_insights_page(
+            selected_dir,
+            leaderboard,
+            forecast_paths,
+            performance,
+            champion,
+            experiment_manifest,
+        )
 
 if __name__ == "__main__":
     main()

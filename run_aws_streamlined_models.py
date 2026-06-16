@@ -1853,6 +1853,11 @@ def run_model_comparison(
 
 def calculate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
     rows = []
+    predictions = predictions.copy()
+    if "feature_transform" not in predictions:
+        predictions["feature_transform"] = "identity"
+    else:
+        predictions["feature_transform"] = predictions["feature_transform"].fillna("identity")
     group_cols = [
         "config_id",
         "model_config_id",
@@ -2400,6 +2405,21 @@ def build_dashboard_outputs(
     champion: dict,
     complexity_profile: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
+    predictions = predictions.copy()
+    model_runs = model_runs.copy()
+    if "feature_transform" not in predictions:
+        predictions["feature_transform"] = "identity"
+    else:
+        predictions["feature_transform"] = predictions["feature_transform"].fillna("identity")
+    if "feature_transform" not in model_runs:
+        model_runs["feature_transform"] = "identity"
+    else:
+        model_runs["feature_transform"] = model_runs["feature_transform"].fillna("identity")
+    if "source_model_config_id" not in predictions:
+        predictions["source_model_config_id"] = ""
+    if "source_model_config_id" not in model_runs:
+        model_runs["source_model_config_id"] = ""
+
     champion_predictions = predictions[predictions["config_id"] == champion["config_id"]].copy()
     forecast_paths = predictions[
         [

@@ -1,0 +1,165 @@
+{
+  "datasets": {
+    "forecast_paths": {
+      "dataset": "forecast_paths",
+      "partition_column": "model_build",
+      "partitions": [
+        {
+          "configs": 15,
+          "path": "forecast_paths_by_build/model_build=arima/part-000.parquet",
+          "rows": 2700,
+          "value": "arima"
+        },
+        {
+          "configs": 2044,
+          "path": "forecast_paths_by_build/model_build=elastic_net/part-000.parquet",
+          "rows": 367920,
+          "value": "elastic_net"
+        },
+        {
+          "configs": 504,
+          "path": "forecast_paths_by_build/model_build=extra_trees/part-000.parquet",
+          "rows": 90720,
+          "value": "extra_trees"
+        },
+        {
+          "configs": 32,
+          "path": "forecast_paths_by_build/model_build=gru/part-000.parquet",
+          "rows": 5760,
+          "value": "gru"
+        },
+        {
+          "configs": 852,
+          "path": "forecast_paths_by_build/model_build=lasso/part-000.parquet",
+          "rows": 153360,
+          "value": "lasso"
+        },
+        {
+          "configs": 32,
+          "path": "forecast_paths_by_build/model_build=lstm/part-000.parquet",
+          "rows": 5760,
+          "value": "lstm"
+        },
+        {
+          "configs": 504,
+          "path": "forecast_paths_by_build/model_build=random_forest/part-000.parquet",
+          "rows": 90720,
+          "value": "random_forest"
+        },
+        {
+          "configs": 1220,
+          "path": "forecast_paths_by_build/model_build=ridge/part-000.parquet",
+          "rows": 219600,
+          "value": "ridge"
+        },
+        {
+          "configs": 24,
+          "path": "forecast_paths_by_build/model_build=sarima/part-000.parquet",
+          "rows": 4320,
+          "value": "sarima"
+        },
+        {
+          "configs": 60,
+          "path": "forecast_paths_by_build/model_build=sarimax/part-000.parquet",
+          "rows": 10800,
+          "value": "sarimax"
+        },
+        {
+          "configs": 1,
+          "path": "forecast_paths_by_build/model_build=seasonal_naive/part-000.parquet",
+          "rows": 180,
+          "value": "seasonal_naive"
+        },
+        {
+          "configs": 3192,
+          "path": "forecast_paths_by_build/model_build=xgboost/part-000.parquet",
+          "rows": 574560,
+          "value": "xgboost"
+        }
+      ],
+      "path": "forecast_paths_by_build",
+      "rows": 1526400
+    },
+    "performance_over_time": {
+      "dataset": "performance_over_time",
+      "partition_column": "model_build",
+      "partitions": [
+        {
+          "configs": 15,
+          "path": "performance_over_time_by_build/model_build=arima/part-000.parquet",
+          "rows": 2700,
+          "value": "arima"
+        },
+        {
+          "configs": 2044,
+          "path": "performance_over_time_by_build/model_build=elastic_net/part-000.parquet",
+          "rows": 367920,
+          "value": "elastic_net"
+        },
+        {
+          "configs": 504,
+          "path": "performance_over_time_by_build/model_build=extra_trees/part-000.parquet",
+          "rows": 90720,
+          "value": "extra_trees"
+        },
+        {
+          "configs": 32,
+          "path": "performance_over_time_by_build/model_build=gru/part-000.parquet",
+          "rows": 5760,
+          "value": "gru"
+        },
+        {
+          "configs": 852,
+          "path": "performance_over_time_by_build/model_build=lasso/part-000.parquet",
+          "rows": 153360,
+          "value": "lasso"
+        },
+        {
+          "configs": 32,
+          "path": "performance_over_time_by_build/model_build=lstm/part-000.parquet",
+          "rows": 5760,
+          "value": "lstm"
+        },
+        {
+          "configs": 504,
+          "path": "performance_over_time_by_build/model_build=random_forest/part-000.parquet",
+          "rows": 90720,
+          "value": "random_forest"
+        },
+        {
+          "configs": 1220,
+          "path": "performance_over_time_by_build/model_build=ridge/part-000.parquet",
+          "rows": 219600,
+          "value": "ridge"
+        },
+        {
+          "configs": 24,
+          "path": "performance_over_time_by_build/model_build=sarima/part-000.parquet",
+          "rows": 4320,
+          "value": "sarima"
+        },
+        {
+          "configs": 60,
+          "path": "performance_over_time_by_build/model_build=sarimax/part-000.parquet",
+          "rows": 10800,
+          "value": "sarimax"
+        },
+        {
+          "configs": 1,
+          "path": "performance_over_time_by_build/model_build=seasonal_naive/part-000.parquet",
+          "rows": 180,
+          "value": "seasonal_naive"
+        },
+        {
+          "configs": 3192,
+          "path": "performance_over_time_by_build/model_build=xgboost/part-000.parquet",
+          "rows": 574560,
+          "value": "xgboost"
+        }
+      ],
+      "path": "performance_over_time_by_build",
+      "rows": 1526400
+    }
+  },
+  "strategy": "Flat path files are curated for backward compatibility. Full path-level forecast and performance rows are available in partitioned datasets for on-demand dashboard loading."
+}

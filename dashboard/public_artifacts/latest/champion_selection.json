@@ -15,6 +15,7 @@
   "mode": "raw",
   "feature_family_name": "history_regime_time_linear_interactions",
   "feature_policy": "tree_top_30",
+  "feature_transform": "identity",
   "feature_set_id": "history_regime_time_linear_interactions__raw__tree_top_30__632d45e0e2f9",
   "n_predictions": 180,
   "n_features": 30,

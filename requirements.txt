@@ -10,6 +10,7 @@ python-dotenv
 PyYAML
 streamlit
 plotly
+polars
 mlflow
 duckdb
 statsmodels

@@ -32,6 +32,16 @@ OPTIONAL_PARQUET = {
     "complexity_profile": "complexity_profile.parquet",
 }
 
+FULL_METADATA_PARQUET = {
+    "model_leaderboard": "model_leaderboard_full.parquet",
+    "complexity_profile": "complexity_profile_full.parquet",
+}
+
+PATH_PARTITION_DIRS = {
+    "forecast_paths": "forecast_paths_by_build",
+    "performance_over_time": "performance_over_time_by_build",
+}
+
 JSON_FILES = [
     "batch_manifest.json",
     "champion_selection.json",
@@ -371,6 +381,67 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def safe_partition_value(value) -> str:
+    """Return a stable path-safe value for simple Hive-style partitions."""
+    text = "unknown" if pd.isna(value) else str(value)
+    safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in text)
+    return safe.strip("_") or "unknown"
+
+
+def write_partitioned_paths(
+    df: pd.DataFrame,
+    output_dir: Path,
+    dataset_name: str,
+    partition_column: str = "model_build",
+) -> dict:
+    """Write a full path-level dataset in small partitions for on-demand dashboard scans."""
+    dataset_dir = output_dir / PATH_PARTITION_DIRS[dataset_name]
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    if df.empty:
+        return {
+            "dataset": dataset_name,
+            "path": str(dataset_dir.relative_to(output_dir)),
+            "partition_column": partition_column,
+            "rows": 0,
+            "partitions": [],
+        }
+
+    out = df.copy()
+    # Keep partition schemas stable across model families. Some baseline-style
+    # partitions have all-null source IDs, which otherwise become a Parquet null
+    # type and break lazy multi-partition scans.
+    for column in ["config_id", "model_config_id", "source_model_config_id"]:
+        if column in out.columns:
+            out[column] = out[column].astype("string")
+    if partition_column not in out.columns:
+        out[partition_column] = "unknown"
+
+    partitions = []
+    for value, group in out.groupby(partition_column, dropna=False, sort=True):
+        partition_value = safe_partition_value(value)
+        partition_dir = dataset_dir / f"{partition_column}={partition_value}"
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        part_path = partition_dir / "part-000.parquet"
+        group.to_parquet(part_path, index=False)
+        partitions.append(
+            {
+                "value": None if pd.isna(value) else str(value),
+                "path": str(part_path.relative_to(output_dir)),
+                "rows": int(len(group)),
+                "configs": int(group[model_id_column(group)].astype(str).nunique()),
+            }
+        )
+
+    return {
+        "dataset": dataset_name,
+        "path": str(dataset_dir.relative_to(output_dir)),
+        "partition_column": partition_column,
+        "rows": int(len(out)),
+        "partitions": partitions,
+    }
+
+
 def main() -> None:
     args = parse_args()
     if not 0 < args.keep_fraction <= 1:
@@ -395,25 +466,52 @@ def main() -> None:
         shutil.rmtree(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    leaderboard = filter_by_configs(frames["model_leaderboard"], selected)
+    full_leaderboard = frames["model_leaderboard"].copy()
+    leaderboard = filter_by_configs(full_leaderboard, selected)
     forecast_paths = filter_by_configs(frames["forecast_paths"], selected)
     performance = filter_by_configs(frames["performance_over_time"], selected)
     champion_predictions = filter_by_configs(frames["champion_predictions"], selected)
 
+    full_leaderboard.to_parquet(args.output_dir / FULL_METADATA_PARQUET["model_leaderboard"], index=False)
     leaderboard.to_parquet(args.output_dir / "model_leaderboard.parquet", index=False)
     forecast_paths.to_parquet(args.output_dir / "forecast_paths.parquet", index=False)
     performance.to_parquet(args.output_dir / "performance_over_time.parquet", index=False)
     champion_predictions.to_parquet(args.output_dir / "champion_predictions.parquet", index=False)
+    recompute_feature_family_summary(full_leaderboard).to_parquet(
+        args.output_dir / "feature_family_summary_full.parquet",
+        index=False,
+    )
     recompute_feature_family_summary(leaderboard).to_parquet(
         args.output_dir / "feature_family_summary.parquet",
         index=False,
     )
 
     if "complexity_profile" in frames:
+        frames["complexity_profile"].to_parquet(
+            args.output_dir / FULL_METADATA_PARQUET["complexity_profile"],
+            index=False,
+        )
         filter_by_configs(frames["complexity_profile"], selected).to_parquet(
             args.output_dir / "complexity_profile.parquet",
             index=False,
         )
+
+    partition_manifest = {
+        "strategy": (
+            "Flat path files are curated for backward compatibility. Full path-level "
+            "forecast and performance rows are available in partitioned datasets for "
+            "on-demand dashboard loading."
+        ),
+        "datasets": {
+            "forecast_paths": write_partitioned_paths(frames["forecast_paths"], args.output_dir, "forecast_paths"),
+            "performance_over_time": write_partitioned_paths(
+                frames["performance_over_time"],
+                args.output_dir,
+                "performance_over_time",
+            ),
+        },
+    }
+    write_json(args.output_dir / "path_partition_manifest.json", partition_manifest)
 
     overview_top = leaderboard.sort_values("selection_score", ascending=True).head(5).copy()
     overview_top["rank"] = range(1, len(overview_top) + 1)
@@ -432,10 +530,18 @@ def main() -> None:
             if filename == "experiment_manifest.json":
                 payload["public_dashboard_bundle"] = {
                     **summary,
+                    "full_metadata_configurations": int(full_leaderboard[model_id_column(full_leaderboard)].nunique()),
+                    "full_path_rows": {
+                        "forecast_paths": int(len(frames["forecast_paths"])),
+                        "performance_over_time": int(len(frames["performance_over_time"])),
+                    },
+                    "path_partition_manifest": "path_partition_manifest.json",
                     "source_dir": str(args.input_dir),
                     "curation_rule": (
-                        "Keep configurations in the best keep_fraction for core performance "
-                        "metrics, plus baseline and champion configurations."
+                        "The flat path files keep configurations in the best keep_fraction "
+                        "for core performance metrics, plus baseline and champion configurations. "
+                        "Full model metadata and full path-level rows are also exported for "
+                        "on-demand dashboard loading."
                     ),
                 }
             shutil.copy2(source, args.output_dir / filename)
@@ -448,9 +554,13 @@ def main() -> None:
     summary.update(
         {
             "output_dir": str(args.output_dir),
+            "full_leaderboard_rows": int(len(full_leaderboard)),
             "leaderboard_rows": int(len(leaderboard)),
             "forecast_rows": int(len(forecast_paths)),
             "performance_rows": int(len(performance)),
+            "full_forecast_rows": int(len(frames["forecast_paths"])),
+            "full_performance_rows": int(len(frames["performance_over_time"])),
+            "path_partition_manifest": "path_partition_manifest.json",
         }
     )
     write_json(args.output_dir / "public_bundle_manifest.json", summary)

@@ -47,13 +47,14 @@ SYSTEM_ARCHITECTURE = """
 - AWS path demonstrates a production-shaped workflow with containerized Python
   jobs, ECS tasks, Step Functions orchestration, S3 artifacts, and CloudWatch
   logs.
-- Local path handles broader experiment sweeps where cost and iteration speed
-  matter more.
+- Local experiment runners handle the broader research sweeps where cost,
+  iteration speed, and long-running model grids matter more.
 - Training runners write portable Parquet/JSON artifacts under a shared
   metadata contract.
 - DuckDB builds a queryable analytical mart, then exports dashboard-ready files.
-- Streamlit reads curated static artifacts so the public app stays fast and
-  inexpensive to host.
+- The public Streamlit bundle keeps full lightweight model metadata, curated
+  compatibility path files, and partitioned full path-level rows that can be
+  loaded on demand.
 """
 
 
@@ -63,8 +64,10 @@ SYSTEM_REASONING = """
 - AWS proves orchestration, repeatability, logging, and artifact handoff.
 - Local/GPU runs make large model grids practical without turning cloud cost
   into the main constraint.
-- The dashboard consumes the same artifact shape regardless of where training
-  happened.
+- DuckDB is the bridge between raw experiment outputs and presentation-shaped
+  dashboard files.
+- The dashboard consumes the same artifact shape regardless of whether training
+  happened through AWS, local CPU runs, or future GPU-backed sequence runs.
 - This split keeps the project readable as a portfolio system while still
   supporting deep experimentation.
 """
@@ -79,31 +82,71 @@ SYSTEM_OVERVIEW = """
   retraining at scale.
 - A fuller MLflow registry could promote candidates into explicit model stages.
 - The current design favors clarity: cloud orchestration plus local experiment
-  breadth under one artifact contract.
+  breadth under one artifact contract, then a static dashboard bundle for
+  public inspection.
 """
 
 
-DATA_PRIMARY_EDA = """
-### Primary EDA
+SYSTEM_ARTIFACT_FLOW = """
+### Dashboard Artifact Flow
 
-- Core series is monthly transit ridership and service context.
-- Current target is H3 UPT, forecast three months ahead from each rolling
-  as-of month.
-- Series includes seasonality, trend, and a visible COVID-era structural break.
-- Useful for testing whether models handle both ordinary seasonality and
-  disrupted operating regimes.
+The dashboard does not train models or query a live experiment server. It reads
+static Parquet/JSON artifacts produced after the experiment runners finish.
+
+The current flow is:
+
+1. **Pipeline artifacts:** source data is normalized, joined to a monthly base,
+   and converted into an as-of-safe feature table.
+2. **Experiment artifacts:** model runners write predictions, model-run rows,
+   metrics, feature-set metadata, and manifests under a common contract.
+3. **DuckDB mart:** completed experiment folders are loaded into a local DuckDB
+   mart so results can be validated, combined, reshaped, and exported.
+4. **Public bundle:** `build_public_dashboard_bundle.py` creates a Streamlit
+   bundle under `dashboard/public_artifacts/latest`.
+5. **Streamlit app:** the dashboard reads the bundle as static files. It uses
+   full model metadata for filtering and loads larger forecast/performance path
+   rows only after the user narrows the model selection.
+
+This keeps the public app lightweight enough to host while preserving a much
+larger result universe for inspection.
 """
 
 
-DATA_SECONDARY_EDA = """
-### Secondary EDA
+DATA_PRIMARY_DATA = """
+### Primary Data | Monthly transit series combining ridership with the service levels used to operate that ridership.
 
-- External context includes gas prices, CPI/inflation, and King County median
-  household income.
-- Income is annual FRED data converted into prior-year monthly context.
-- Forecast months only use context that would have been known at the as-of date.
-- These features create testable hypotheses about economic pressure and
-  changing travel behavior.
+- **Unlinked Passenger Trip (UPT):** one person boarding a transit vehicle,
+  counted every time they board, regardless of transfers.
+- **Vehicle Revenue Miles (VRM):** all miles a transit vehicle travels while it
+  is in revenue service and available to carry passengers.
+- **Vehicle Revenue Hours (VRH):** all hours a transit vehicle operates in
+  revenue service and is available to carry passengers.
+- **Vehicles Operated in Maximum Service (VOMS):** often labeled "Peak
+  Vehicles," the largest number of revenue vehicles actually in service
+  simultaneously for a given mode on the busiest day or reporting period,
+  typically during the peak demand window.
+
+*For VRM and VRH, revenue service includes layover and recovery time, but
+excludes deadhead (non-revenue) mileage such as pull-outs, pull-ins, and
+training or maintenance runs.*
+
+Source: [FTA NTD Complete Monthly Ridership](https://www.transit.dot.gov/ntd/data-product/monthly-module-adjusted-data-release).
+"""
+
+
+DATA_SECONDARY_DATA = """
+### Secondary Data | External context includes gas prices, CPI/inflation, and King County median household income.
+
+- **[EIA gasoline prices](https://www.eia.gov/petroleum/gasdiesel/)** contribute transportation cost context and are
+  normalized monthly, then used directly plus year-over-year and change
+  features.
+- **FRED CPI series** ([All Items](https://fred.stlouisfed.org/series/CPIAUCSL),
+  [Core](https://fred.stlouisfed.org/series/CPILFESL)) contribute general and core price-pressure context and are
+  normalized monthly, imputed when needed, then used as exogenous and
+  interaction features.
+- **[FRED King County median household income](https://fred.stlouisfed.org/series/MHIWA53033A052NCEN)** contributes annual socioeconomic
+  context and is converted to prior-year monthly context with income-growth and
+  affordability-pressure features.
 """
 
 

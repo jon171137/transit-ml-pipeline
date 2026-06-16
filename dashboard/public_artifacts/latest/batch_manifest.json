@@ -1,14 +1,14 @@
 {
-  "run_id": "combined_phase_abc_v3_pandemic_safe_tuned",
-  "experiment_id": "combined_phase_abc_v3_pandemic_safe_tuned",
-  "created_at_utc": "2026-06-08T04:22:20.712162+00:00",
+  "run_id": "combined_phase_abc_v3_pandemic_safe_tuned_plus_nonlinear",
+  "experiment_id": "combined_phase_abc_v3_pandemic_safe_tuned_plus_nonlinear",
+  "created_at_utc": "2026-06-16T01:29:01.041402+00:00",
   "source_results_dirs": [
-    "experiments_output/combined_phase_ab_v3_pandemic_safe/results",
-    "experiments_output/phase_c_neural_v3_pandemic_safe_tuned/results"
+    "experiments_output/combined_phase_abc_v3_pandemic_safe_tuned/results",
+    "experiments_output/phase_a_linear_nonlinear_top_decile/non_identity_results"
   ],
   "source_experiments": [
-    "combined_phase_ab_v3_pandemic_safe",
-    "phase_c_neural_v3_pandemic_safe_tuned"
+    "combined_phase_abc_v3_pandemic_safe_tuned",
+    "phase_a_linear_nonlinear_top_decile"
   ],
   "target": "upt",
   "horizon": 3,
@@ -41,9 +41,9 @@
     "tree_top_30",
     "variance_pruned"
   ],
-  "prediction_count": 1314720,
-  "model_run_count": 1314720,
-  "metric_count": 36520,
+  "prediction_count": 1526400,
+  "model_run_count": 1526400,
+  "metric_count": 42400,
   "champion_config_id": "xgboost__raw__history_regime_time_linear_interactions__policy-tree_top_30__colsample_bytree-0.8_learning_rate-0.05_max_depth-3_min_child_weight-1_n_estimators-500_subsample-0.8",
   "selection_rule": "Choose the simplest model within 2% of the best balanced weighted score, where balanced score = 0.75 * MAE + 0.25 * RMSE. The dashboard also stores typical-error and large-error score variants for alternate rankings.",
   "runtime": {
