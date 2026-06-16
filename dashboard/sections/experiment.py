@@ -21,7 +21,7 @@ from content import (
 )
 from data_access import configured_feature_table_path, file_modified_ns, load_feature_table
 from formatting import date_range_label, format_int, manifest_value
-from pages.overview import render_public_bundle_note
+from sections.overview import render_public_bundle_note
 from ui_components import champion_summary_item, model_scope_summary_html
 
 

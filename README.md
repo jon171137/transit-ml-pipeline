@@ -88,7 +88,7 @@ Streamlit does not train models and does not query a live experiment server. It 
 | Path | Purpose |
 |---|---|
 | `dashboard/app.py` | Streamlit app shell: theme, artifact loading, and page routing |
-| `dashboard/pages/` | Page renderers for Overview, Data, System, Experiment, Model Explorer, and Insights |
+| `dashboard/sections/` | Page renderers for Overview, Data, System, Experiment, Model Explorer, and Insights |
 | `dashboard/charts.py` | Reusable Plotly chart builders |
 | `dashboard/data_access.py` | Cached dashboard artifact/source-table loading helpers |
 | `dashboard/model_helpers.py` | Shared model-ranking, filtering, score-table, and path-loading helpers |
@@ -236,7 +236,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
   .venv/bin/python -m py_compile \
   dashboard/app.py \
   dashboard/*.py \
-  dashboard/pages/*.py \
+  dashboard/sections/*.py \
   scripts/validate_dashboard_bundle.py
 ```
 

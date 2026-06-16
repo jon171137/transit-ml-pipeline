@@ -25,12 +25,12 @@ from model_helpers import (
     ensure_model_taxonomy,
     normalize_dates,
 )
-from pages.experiment import render_experiment_page
-from pages.data import render_data_page
-from pages.insights import render_insights_page
-from pages.model_explorer import render_model_explorer_page
-from pages.overview import render_overview_page
-from pages.system import render_system_page
+from sections.experiment import render_experiment_page
+from sections.data import render_data_page
+from sections.insights import render_insights_page
+from sections.model_explorer import render_model_explorer_page
+from sections.overview import render_overview_page
+from sections.system import render_system_page
 
 
 st.set_page_config(

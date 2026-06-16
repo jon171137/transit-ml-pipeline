@@ -190,7 +190,7 @@ Primary files:
 
 ```text
 dashboard/app.py
-dashboard/pages/
+dashboard/sections/
 dashboard/charts.py
 dashboard/data_access.py
 dashboard/model_helpers.py
@@ -205,12 +205,12 @@ Current module responsibilities:
 | Module | Role |
 |---|---|
 | `dashboard/app.py` | Streamlit shell: theme injection, artifact loading, artifact preparation, and section routing. |
-| `dashboard/pages/overview.py` | Public project overview and bundle framing. |
-| `dashboard/pages/data.py` | Source definitions, source-series EDA, correlation diagnostics, and availability/imputation reporting. |
-| `dashboard/pages/system.py` | System architecture, AWS/local split, and artifact flow explanation. |
-| `dashboard/pages/experiment.py` | Experiment scope, feature families, feature policies, and transform summaries. |
-| `dashboard/pages/model_explorer.py` | Interactive model/path/metric filtering and inspection. |
-| `dashboard/pages/insights.py` | Guided interpretation of selected experiment findings. |
+| `dashboard/sections/overview.py` | Public project overview and bundle framing. |
+| `dashboard/sections/data.py` | Source definitions, source-series EDA, correlation diagnostics, and availability/imputation reporting. |
+| `dashboard/sections/system.py` | System architecture, AWS/local split, and artifact flow explanation. |
+| `dashboard/sections/experiment.py` | Experiment scope, feature families, feature policies, and transform summaries. |
+| `dashboard/sections/model_explorer.py` | Interactive model/path/metric filtering and inspection. |
+| `dashboard/sections/insights.py` | Guided interpretation of selected experiment findings. |
 | `dashboard/charts.py` | Reusable Plotly chart builders shared by pages. |
 | `dashboard/data_access.py` | Cached Parquet/JSON/text loading and artifact path helpers. |
 | `dashboard/model_helpers.py` | Shared model-result ranking, filtering, score-table, and path-loading helpers. |
@@ -301,7 +301,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
   .venv/bin/python -m py_compile \
   dashboard/app.py \
   dashboard/*.py \
-  dashboard/pages/*.py \
+  dashboard/sections/*.py \
   scripts/validate_dashboard_bundle.py
 ```
 
@@ -336,7 +336,7 @@ If the live app shows old navigation or old counts, check these first:
 | New source data or feature logic | `create_feature_table.py`, `docs/experiment_metadata_contract.md`, dashboard Data/System copy |
 | New experiment family | Runner script, `experiment_configs/`, `build_experiment_mart.py`, README, this project map |
 | New dashboard artifact layout | `build_public_dashboard_bundle.py`, `dashboard/data_access.py`, relevant page module, README, this project map |
-| New public dashboard interpretation | `experiment_results_insights.ipynb`, `dashboard/pages/insights.py`, local review notes if useful |
+| New public dashboard interpretation | `experiment_results_insights.ipynb`, `dashboard/sections/insights.py`, local review notes if useful |
 | New deployment dependency | `dashboard/requirements.txt` |
 
 ## Historical Docs

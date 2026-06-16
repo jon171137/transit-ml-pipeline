@@ -17,7 +17,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
   .venv/bin/python -m py_compile \
   dashboard/app.py \
   dashboard/*.py \
-  dashboard/pages/*.py \
+  dashboard/sections/*.py \
   scripts/validate_dashboard_bundle.py
 ```
 
