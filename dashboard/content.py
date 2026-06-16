@@ -80,7 +80,9 @@ SYSTEM_OVERVIEW = """
 - Lambda remains useful for lighter ingestion or source-specific fetch steps.
 - Managed training jobs would make sense if the project moved toward scheduled
   retraining at scale.
-- A fuller MLflow registry could promote candidates into explicit model stages.
+- The current runners can optionally log compact MLflow experiment summaries;
+  a fuller MLflow registry with promoted model stages would be a later
+  extension, not a dependency of this dashboard.
 - The current design favors clarity: cloud orchestration plus local experiment
   breadth under one artifact contract, then a static dashboard bundle for
   public inspection.
@@ -99,6 +101,9 @@ The current flow is:
    and converted into an as-of-safe feature table.
 2. **Experiment artifacts:** model runners write predictions, model-run rows,
    metrics, feature-set metadata, and manifests under a common contract.
+   They also produce MLflow-compatible metadata and can optionally log compact
+   experiment summaries, but the dashboard does not depend on a live MLflow
+   server.
 3. **DuckDB mart:** completed experiment folders are loaded into a local DuckDB
    mart so results can be validated, combined, reshaped, and exported.
 4. **Public bundle:** `build_public_dashboard_bundle.py` creates a Streamlit

@@ -2686,9 +2686,10 @@ def render_experiment_page(
     st.markdown("### Experiment Configs Used")
     st.write(
         "These YAML files define the model grids, feature families, feature "
-        "policies, rolling forecast window, parallelization settings, MLflow "
-        "tracking names, checkpoint locations, and output artifact folders used "
-        "for the current dashboard bundle and the next neural follow-up."
+        "policies, rolling forecast window, parallelization settings, optional "
+        "MLflow summary-logging settings, checkpoint locations, and output "
+        "artifact folders used for the current dashboard bundle and the next "
+        "neural follow-up."
     )
     config_rows = [
         {
@@ -2743,16 +2744,16 @@ def render_insights_page(
 ) -> None:
     st.subheader("Insights")
     st.write(
-        "This page is the companion to Model Explorer. Model Explorer is built for "
-        "interactive filtering; Insights is built for directed interpretation of "
-        "what the experiment results suggest across model classes, feature choices, "
-        "time periods, and forecast failure modes."
+        "This page distills selected findings from the experiment results. "
+        "Model Explorer is built for interactive filtering; Insights is built "
+        "for a guided read of what the runs suggest about model families, "
+        "feature choices, evaluation periods, and recurring forecast failure modes."
     )
     notebook_status = "available" if RESULTS_INSIGHTS_NOTEBOOK_PATH.exists() else "planned"
     st.caption(
-        f"Working notebook: `{RESULTS_INSIGHTS_NOTEBOOK_PATH}` ({notebook_status}). "
-        "The notebook is where exploratory result analysis can stay deeper and messier "
-        "before selected findings are promoted into this dashboard page."
+        f"Companion analysis notebook: `{RESULTS_INSIGHTS_NOTEBOOK_PATH}` ({notebook_status}). "
+        "The notebook retains deeper exploratory checks; this page promotes the "
+        "findings most useful for reviewing the public dashboard results."
     )
 
     bundle = experiment_manifest.get("public_dashboard_bundle", {})
@@ -2771,23 +2772,29 @@ def render_insights_page(
 
     inquiry_rows = [
         {
-            "Question": "Which models are robust across periods?",
-            "How this page/notebook investigates it": "Compare overall rank against pre-COVID, shock, recovery, and recent-period error.",
+            "Question": "Which model families remain competitive across periods?",
+            "How this page investigates it": "Compare overall rank against pre-COVID, COVID shock, recovery, and recent-period error.",
         },
         {
-            "Question": "Do nonlinear feature transforms help?",
-            "How this page/notebook investigates it": "Compare no-transform, signed-log, quadratic, cubic, and combined transforms within linear model builds.",
+            "Question": "Do nonlinear linear-model transforms help?",
+            "How this page investigates it": "Compare untransformed, signed-log, quadratic, cubic, and combined transform screens within regularized linear models.",
         },
         {
-            "Question": "Which feature policies are doing useful work?",
-            "How this page/notebook investigates it": "Compare none, correlation pruning, mutual information, and tree selectors across comparable model families.",
+            "Question": "Which feature policies appear useful?",
+            "How this page investigates it": "Compare unfiltered, pruning, mutual information, and tree-based selectors across comparable model families.",
         },
         {
-            "Question": "Where do forecasts break down?",
-            "How this page/notebook investigates it": "Inspect residuals, large-error months, and error concentration by evaluation period.",
+            "Question": "Where do forecasts fail in similar ways?",
+            "How this page investigates it": "Inspect shock-window paths, residual behavior, and error concentration by evaluation period.",
         },
     ]
     st.markdown("### Directed Result Questions")
+    st.write(
+        "The sections below are organized around review questions rather than raw "
+        "output tables. Each question separates leaderboard rank from model behavior: "
+        "which strategies are accurate overall, which survive hard periods, and where "
+        "similar aggregate scores hide different forecast paths."
+    )
     st.dataframe(pd.DataFrame(inquiry_rows), use_container_width=True, hide_index=True)
 
     candidate_models = exclude_baseline_candidates(leaderboard)
@@ -2795,11 +2802,12 @@ def render_insights_page(
     if not candidate_models.empty and score_col in candidate_models:
         st.markdown("### COVID Shock Forecast Paths")
         st.write(
-            "This chart fixes the Model Explorer view to one intentionally narrow "
-            "question: taking the best balanced-score configuration from each model "
-            "build, how did the forecast paths behave from immediately before the "
-            "COVID shock through the point where several models begin moving back "
-            "toward observed ridership?"
+            "The COVID shock is the clearest stress test in the forecast history. "
+            "In the first shock months, the best representative from each model "
+            "build generally overpredicts ridership because the models are extrapolating "
+            "from pre-shock structure into a sudden break. The value of this view is "
+            "not that any model anticipated the break; it shows how quickly different "
+            "model families moved back toward the new observed level."
         )
         best_by_build = limit_configs_per_build(candidate_models, "Balanced score", "Top 1")
         best_by_build = limit_total_configs(best_by_build, "Balanced score", "All")
@@ -2824,10 +2832,11 @@ def render_insights_page(
                 use_container_width=True,
             )
             st.caption(
-                "Selection: non-baseline model configurations only; top one per model build by balanced score. "
-                "The dashed orange line is the seasonal-naive reference, while the thick black line is actual UPT. "
-                "The spread in 2020 shows how differently model families reacted to an abrupt structural break; "
-                "the convergence by early 2021 is a useful clue for comparing shock handling against recovery behavior."
+                "Selection: top one non-baseline configuration per model build by balanced score, "
+                "target months January 2020 through May 2021. The dashed orange line is the "
+                "seasonal-naive reference, and the thick black line is actual UPT. In this view, "
+                "XGBoost is less wrong during the initial shock than most other model-build "
+                "representatives, but all selected families struggle with the abrupt level shift."
             )
             if duplicate_count:
                 st.caption(
@@ -2841,9 +2850,10 @@ def render_insights_page(
 
         st.markdown("#### Top 10 Overall Models In The Same Window")
         st.write(
-            "The companion view removes the per-build diversity rule and asks a more "
-            "leaderboard-like question: among the top 10 non-baseline configurations "
-            "overall, how similar are their shock-period paths?"
+            "This companion view removes the model-family diversity rule and shows "
+            "the ten strongest non-baseline configurations overall. In the current "
+            "bundle, all ten are XGBoost, which means the pure leaderboard view is "
+            "more concentrated than the per-build comparison above."
         )
         top10_overall = limit_total_configs(candidate_models, "Balanced score", "Top 10")
         top10_configs = top10_overall["model_config_id"].astype(str).tolist()
@@ -2868,8 +2878,9 @@ def render_insights_page(
             )
             st.caption(
                 "Selection: top 10 non-baseline configurations by balanced score, regardless of model build. "
-                "If these paths cluster tightly, the leaderboard is pointing toward a shared modeling strategy; "
-                "if they diverge, similar aggregate scores may be hiding different shock-period behavior."
+                "These paths cluster around a shared modeling strategy: boosted trees with history, regime, "
+                "and time-context features. They still overpredict the first shock months, but they do so "
+                "less severely and more consistently than the broader per-build set."
             )
             if top10_duplicate_count:
                 st.caption(
@@ -2884,9 +2895,12 @@ def render_insights_page(
         xgboost_count = int(top10_overall["model_build"].astype(str).eq("xgboost").sum()) if "model_build" in top10_overall else 0
         st.markdown("### Why XGBoost Is A Plausible Front-Runner")
         st.write(
-            "The current leaderboard suggests that XGBoost is not merely winning because it is a tree model. "
-            "It is likely benefiting from the combination of boosted shallow trees, regularization, and wide "
-            "feature families that include lagged history, regime indicators, time context, and targeted interactions."
+            "The current evidence supports a hypothesis rather than a final explanation: "
+            "XGBoost appears to benefit from the interaction between boosted trees and "
+            "feature families that already encode recent history, regime context, calendar "
+            "timing, and targeted interactions. The top-10 balanced-score slice is entirely "
+            "XGBoost, so the next question is not simply whether trees work, but which "
+            "boosted-tree ingredients matter most."
         )
         if not top10_overall.empty:
             st.caption(
@@ -2895,33 +2909,33 @@ def render_insights_page(
             )
         xgb_rows = [
             {
-                "Likely contributor": "Boosting learns sequential corrections",
-                "Why it matters here": "A random forest averages independent trees; boosting can fit residual structure left by earlier trees, which is useful when ordinary seasonality breaks.",
-                "Follow-up test": "Compare XGBoost to sklearn gradient boosting / histogram gradient boosting under matched feature sets.",
+                "Evidence": "Top 10 overall configurations are all XGBoost",
+                "Interpretation": "The strongest leaderboard slice is concentrated in one boosted-tree strategy, not spread evenly across model classes.",
+                "Follow-up test": "Compare XGBoost against tuned Random Forest, Extra Trees, and sklearn gradient-boosted trees under matched feature families.",
             },
             {
-                "Likely contributor": "Nonlinear interactions without manual recipes",
-                "Why it matters here": "The strongest feature families contain regime, service, time, and interaction signals. Boosted trees can choose thresholds and combinations without requiring explicit linear terms.",
-                "Follow-up test": "Run XGBoost with interaction-heavy families removed, then with only compact history/regime families.",
+                "Evidence": "Top XGBoost paths are less wrong in the initial COVID shock than the per-build-diverse set",
+                "Interpretation": "Boosted trees may be using regime, time, and history features more effectively under sudden level shifts.",
+                "Follow-up test": "Hold the XGBoost model fixed and ablate regime, time, interaction, and service feature groups.",
             },
             {
-                "Likely contributor": "Regularized incremental fit",
-                "Why it matters here": "Learning rate, tree depth, subsampling, and child-weight constraints can make XGBoost flexible without letting every noisy feature dominate.",
-                "Follow-up test": "Ablate learning rate, depth, subsample, colsample, and min_child_weight while holding the feature family constant.",
+                "Evidence": "Most top XGBoost configurations use tree_top_30",
+                "Interpretation": "Split-based feature selection may align well with split-based final models.",
+                "Follow-up test": "Compare none, tree_top_30, mutual information, and correlation pruning inside the same XGBoost grid.",
             },
             {
-                "Likely contributor": "Feature-policy alignment",
-                "Why it matters here": "Tree-top feature policies may pair especially well with XGBoost because the selector and final model both favor split-based nonlinear signal.",
-                "Follow-up test": "Compare `none`, `tree_top_30`, mutual information, and correlation pruning within XGBoost and Random Forest on the same families.",
+                "Evidence": "Top models still overpredict early COVID months",
+                "Interpretation": "Performance leadership does not mean the structural break was solved.",
+                "Follow-up test": "Add residual diagnostics, conformal intervals, and period-specific calibration checks.",
             },
         ]
         st.dataframe(pd.DataFrame(xgb_rows), use_container_width=True, hide_index=True)
         st.info(
-            "A follow-up experiment is worth planning, but it should be framed as an ablation. "
-            "Adding more random-forest variants can test whether the gap is just tree capacity, "
-            "but it will not reproduce the central XGBoost ingredient: sequential gradient boosting. "
-            "The cleaner comparison is a matched tree-family study: tuned Random Forest and Extra Trees, "
-            "gradient-boosted trees, and XGBoost ablations across the same feature families and scoring windows."
+            "A useful next experiment is a matched tree-family ablation. More random-forest "
+            "variants could test whether the gap is just tree capacity, but random forests do "
+            "not reproduce XGBoost's sequential residual-correction mechanism. The cleaner "
+            "test is to compare tuned Random Forest, Extra Trees, gradient-boosted trees, and "
+            "XGBoost ablations across the same feature families, periods, and scoring rules."
         )
 
     if not candidate_models.empty and score_col in candidate_models:
@@ -2940,9 +2954,10 @@ def render_insights_page(
         build_summary = model_taxonomy_sort(build_summary).sort_values("best_balanced_score")
         st.markdown("### First-Pass Model Build Summary")
         st.write(
-            "This is a compact starting point for the deeper notebook analysis: one row "
-            "per model build, ranked by the best balanced score found in the current "
-            "dashboard artifact bundle."
+            "This summary ranks one row per model build by the best balanced score "
+            "found in the current artifact bundle. It is a map of where the search "
+            "found strong candidates, not proof that every model family received "
+            "identical search depth."
         )
         fig = px.bar(
             build_summary.sort_values("best_balanced_score", ascending=True),
@@ -3004,11 +3019,11 @@ def render_insights_page(
             ).drop(columns=["_transform_order", "feature_transform"])
             st.markdown("### Linear Transform Screening")
             st.write(
-                "This first-pass table compares transform families inside the regularized "
-                "linear models. It is a screening view, not yet a conclusion about which "
-                "variables should receive which transform. No transform is the untransformed "
-                "baseline and is shown first for each model build. Non-identity transform "
-                "families keep the original selected features and append transformed terms."
+                "The transform screen asks whether regularized linear models benefit "
+                "from adding broad nonlinear terms. These runs should be read as "
+                "screening experiments, not variable-specific transform recommendations: "
+                "transformed families append terms such as signed logs or powers to "
+                "the selected features, then regularization decides which terms survive."
             )
             lasso_rows = linear_models[linear_models["model_build"].astype(str).eq("lasso")]
             if not lasso_rows.empty and set(lasso_rows["feature_transform"].dropna().astype(str)) == {"identity"}:
@@ -3042,10 +3057,10 @@ def render_insights_page(
             )
         st.markdown("### Period Difficulty Snapshot")
         st.write(
-            "A useful result-inspection habit is to separate the global leaderboard "
-            "from period-specific behavior. This snapshot starts that comparison by "
-            "showing the best and median MAE by evaluation period, plus how much the "
-            "best configuration improves on the typical configuration in that period."
+            "Overall rank can hide period-specific behavior. This snapshot compares "
+            "the best and median MAE by evaluation period so the dashboard can "
+            "separate ordinary forecasting difficulty from pandemic shock and "
+            "recovery dynamics."
         )
         st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
 
@@ -4441,6 +4456,13 @@ def main() -> None:
     elif active_section == "Model Explorer":
         render_champion_snapshot(champion, forecast_paths, experiment_manifest)
         st.subheader("Top Models Against Actual Ridership")
+        st.info(
+            "How to read this page: use Top 1 per build to compare model families, "
+            "then use Top total to see whether the leaderboard concentrates around "
+            "one strategy. The date window is useful for stress-testing specific "
+            "periods such as COVID shock or recovery, and Metric Mapping below helps "
+            "separate accuracy from tradeoffs like shock behavior and stability."
+        )
         filter_cols = st.columns([2.1, 1.0, 1.2])
         selected_model_build_labels = optional_multiselect(
             "Model builds",
