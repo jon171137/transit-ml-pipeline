@@ -287,11 +287,13 @@ numpy
 pyarrow
 plotly
 polars
-scipy
-statsmodels
 ```
 
 There is no separate root-level dashboard requirements file; `dashboard/requirements.txt` is the single source of truth for the public dashboard runtime.
+
+`scipy` and `statsmodels` are optional for local diagnostic sections. The
+dashboard skips those diagnostics gracefully when the packages are not present
+in the public runtime.
 
 Before pushing public dashboard changes, run the local smoke checks:
 

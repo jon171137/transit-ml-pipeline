@@ -92,8 +92,6 @@ DASHBOARD_IMPORT_PACKAGE_NAMES = {
     "pandas": "pandas",
     "plotly": "plotly",
     "polars": "polars",
-    "scipy": "scipy",
-    "statsmodels": "statsmodels",
     "streamlit": "streamlit",
 }
 

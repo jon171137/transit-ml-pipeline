@@ -25,13 +25,6 @@ from model_helpers import (
     ensure_model_taxonomy,
     normalize_dates,
 )
-from sections.experiment import render_experiment_page
-from sections.data import render_data_page
-from sections.insights import render_insights_page
-from sections.model_explorer import render_model_explorer_page
-from sections.overview import render_overview_page
-from sections.system import render_system_page
-
 
 st.set_page_config(
     page_title="Transit Forecasting Lab",
@@ -667,15 +660,23 @@ def main() -> None:
         active_section = section_options[0]
 
     if active_section == "Project Overview":
+        from sections.overview import render_overview_page
+
         render_overview_page(experiment_manifest, leaderboard, forecast_paths, champion)
 
     elif active_section == "Data":
+        from sections.data import render_data_page
+
         render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
 
     elif active_section == "System":
+        from sections.system import render_system_page
+
         render_system_page(experiment_manifest, len(forecast_paths))
 
     elif active_section == "Experiment":
+        from sections.experiment import render_experiment_page
+
         render_experiment_page(
             family_summary,
             feature_families,
@@ -690,6 +691,8 @@ def main() -> None:
         )
 
     elif active_section == "Model Explorer":
+        from sections.model_explorer import render_model_explorer_page
+
         render_model_explorer_page(
             selected_dir,
             leaderboard,
@@ -700,6 +703,8 @@ def main() -> None:
         )
 
     elif active_section == "Insights":
+        from sections.insights import render_insights_page
+
         render_insights_page(
             selected_dir,
             leaderboard,

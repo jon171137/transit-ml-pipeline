@@ -4,5 +4,3 @@ numpy
 pyarrow
 plotly
 polars
-scipy
-statsmodels
