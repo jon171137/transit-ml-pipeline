@@ -1,0 +1,135 @@
+experiment_id: phase_a_linear_nonlinear_top_decile
+description: >
+  Linear-model nonlinear feature-transform experiment seeded from the top decile
+  of the large Phase A pandemic-safe linear leaderboard. This run tests whether
+  signed-log, quadratic, cubic, or combined nonlinear expansions improve rolling
+  3-month-ahead UPT forecasts over the strongest prior linear feature-family,
+  policy, and hyperparameter combinations.
+
+status: draft
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_a_linear_nonlinear_top_decile/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_a_linear_nonlinear_top_decile
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2011-01-01
+  as_of_end: 2025-12-01
+  as_of_frequency_months: 1
+  refit_frequency_months: 1
+  min_train_rows: 60
+
+execution:
+  n_jobs: 4
+  checkpointing:
+    enabled: true
+    checkpoint_dir: experiments_output/phase_a_linear_nonlinear_top_decile/checkpoints
+    chunk_dir: experiments_output/phase_a_linear_nonlinear_top_decile/chunks
+    resume: true
+  random_seed: 42
+
+tracking:
+  mlflow:
+    enabled: true
+    tracking_uri: mlruns
+    experiment_name: transit-forecasting-linear-nonlinear
+    run_name: phase_a_linear_nonlinear_top_decile
+
+feature_families:
+  include:
+    - history_regime
+    - history_regime_all_exog
+    - history_regime_all_exog_linear_interactions
+    - history_regime_cpi
+    - history_regime_cpi_service
+    - history_regime_gas
+    - history_regime_gas_cpi
+    - history_regime_gas_service
+    - history_regime_income
+    - history_regime_income_linear_interactions
+    - history_regime_income_pressure
+    - history_regime_linear_interactions
+    - history_regime_service
+    - history_regime_time
+    - history_regime_time_all_exog
+    - history_regime_time_linear_interactions
+
+modes:
+  linear:
+    - raw
+    - residual
+
+feature_policies:
+  linear:
+    - none
+    - corr_pruned
+    - variance_pruned
+    - mutual_info_top_30
+    - lasso_selected
+
+feature_transforms:
+  linear:
+    - identity
+    - log_signed
+    - quadratic
+    - cubic
+    - log_signed_quadratic_cubic
+
+model_config_seed:
+  enabled: true
+  source_uri: dashboard_artifacts/aws_streamlined/latest/model_leaderboard.parquet
+  model_family: linear
+  fraction: 0.10
+  score_column: selection_score_balanced
+
+models:
+  linear:
+    ridge:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 1.0
+        - alpha: 10.0
+        - alpha: 100.0
+
+    lasso:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 1000.0
+          max_iter: 10000
+
+    elastic_net:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 0.1
+          l1_ratio: 0.25
+          max_iter: 10000
+        - alpha: 0.1
+          l1_ratio: 0.5
+          max_iter: 10000
+        - alpha: 1.0
+          l1_ratio: 0.25
+          max_iter: 10000
+        - alpha: 1.0
+          l1_ratio: 0.5
+          max_iter: 10000
+
+notes:
+  transform_order: >
+    Feature policies are fit on each rolling training window using the original
+    feature columns. The selected base columns are then expanded into the chosen
+    nonlinear representation before the linear model is fit.
+  top_decile_seed: >
+    Scope is based on unique model types, feature families, feature policies,
+    modes, and hyperparameters appearing in the top 10 percent of prior linear
+    model configurations by balanced selection score. The resulting grid includes
+    recombinations within that top-decile envelope rather than only exact prior
+    config IDs.

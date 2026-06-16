@@ -1,0 +1,69 @@
+experiment_id: phase_a_linear_nonlinear_smoke
+description: >
+  Tiny smoke test for the linear nonlinear feature-transform experiment.
+
+status: smoke-test
+
+inputs:
+  feature_table_uri: feature_store/income_interactions_h3_v1/feature_table.parquet
+  feature_families_uri: feature_store/income_interactions_h3_v1/feature_families.json
+
+outputs:
+  results_base_uri: experiments_output/phase_a_linear_nonlinear_smoke/results
+  dashboard_base_uri: dashboard_artifacts/aws_streamlined/phase_a_linear_nonlinear_smoke
+
+forecast:
+  target: upt
+  horizon: 3
+  as_of_start: 2024-01-01
+  as_of_end: 2024-03-01
+  as_of_frequency_months: 1
+  refit_frequency_months: 1
+  min_train_rows: 60
+
+execution:
+  n_jobs: 1
+  checkpointing:
+    enabled: false
+    checkpoint_dir: experiments_output/phase_a_linear_nonlinear_smoke/checkpoints
+    chunk_dir: experiments_output/phase_a_linear_nonlinear_smoke/chunks
+    resume: false
+  random_seed: 42
+
+tracking:
+  mlflow:
+    enabled: false
+
+feature_families:
+  include:
+    - history_regime_cpi_service
+    - history_regime_time
+
+feature_policies:
+  linear:
+    - none
+    - variance_pruned
+
+feature_transforms:
+  linear:
+    - identity
+    - log_signed
+    - quadratic
+    - cubic
+    - log_signed_quadratic_cubic
+
+models:
+  linear:
+    ridge:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 100.0
+
+    elastic_net:
+      enabled: true
+      implementation_status: implemented
+      param_grid:
+        - alpha: 1.0
+          l1_ratio: 0.5
+          max_iter: 10000
