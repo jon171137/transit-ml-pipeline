@@ -270,6 +270,17 @@ statsmodels
 
 There is no separate root-level dashboard requirements file; `dashboard/requirements.txt` is the single source of truth for the public dashboard runtime.
 
+Before pushing public dashboard changes, run the local smoke checks:
+
+```bash
+.venv/bin/python scripts/validate_dashboard_bundle.py
+PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
+  .venv/bin/python -m py_compile dashboard/app.py
+```
+
+The validator checks required public-bundle files, key Parquet schemas,
+manifest row counts, partition row counts, and dashboard runtime dependencies.
+
 After pushing dashboard changes:
 
 1. Confirm GitHub has the latest commit on `main`.
@@ -294,8 +305,23 @@ If the live app shows old navigation or old counts, check these first:
 | New public dashboard interpretation | `experiment_results_insights.ipynb`, `dashboard/app.py`, local review notes if useful |
 | New deployment dependency | `dashboard/requirements.txt` |
 
+## Historical Docs
+
+Older planning docs that are useful as project history but are no longer the
+canonical guide live in:
+
+```text
+docs/archive/
+```
+
+Current orientation docs are:
+
+```text
+README.md
+docs/project_map.md
+docs/experiment_metadata_contract.md
+```
+
 ## Recommended Next Cleanup After This Map
 
-- Add lightweight schema tests for public dashboard artifacts.
-- Add a smoke test that imports `dashboard/app.py` and validates required public bundle files exist.
 - Consider modularizing `dashboard/app.py` into data access, charts, formatting, and page modules once content stabilizes.

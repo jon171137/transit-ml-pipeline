@@ -220,6 +220,20 @@ DASHBOARD_ARTIFACT_DIR=/path/to/dashboard_export \
 .venv/bin/python -m streamlit run dashboard/app.py
 ```
 
+## Pre-Deploy Dashboard Smoke Check
+
+Before pushing dashboard/public-bundle changes to the live site, run:
+
+```bash
+.venv/bin/python scripts/validate_dashboard_bundle.py
+PYTHONPYCACHEPREFIX=/private/tmp/transit_pycache \
+  .venv/bin/python -m py_compile dashboard/app.py
+```
+
+The validator checks required dashboard artifacts, core Parquet schemas,
+manifest row counts, partition row counts, and whether
+`dashboard/requirements.txt` covers the imports used by `dashboard/app.py`.
+
 ## Requirements Files
 
 | File | Purpose |
@@ -245,6 +259,12 @@ Legacy notebooks have been moved to:
 
 ```text
 notebooks/archive/
+```
+
+Historical planning docs have been moved to:
+
+```text
+docs/archive/
 ```
 
 ## MLflow Role
@@ -314,6 +334,12 @@ Build the public dashboard bundle:
 
 ```bash
 .venv/bin/python build_public_dashboard_bundle.py
+```
+
+Validate the public dashboard bundle:
+
+```bash
+.venv/bin/python scripts/validate_dashboard_bundle.py
 ```
 
 ## Project Status
