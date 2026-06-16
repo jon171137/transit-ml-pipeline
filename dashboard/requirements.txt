@@ -1,4 +1,8 @@
 streamlit
 pandas
+numpy
 pyarrow
 plotly
+polars
+scipy
+statsmodels
