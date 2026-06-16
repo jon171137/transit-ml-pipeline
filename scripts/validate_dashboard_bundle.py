@@ -13,6 +13,7 @@ import ast
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -241,7 +242,12 @@ def check_partition_manifest(bundle_dir: Path, failures: list[str]) -> None:
             ok(f"{dataset_name} full row count matches public manifest")
 
 
-def import_names_from_app(path: Path) -> set[str]:
+def local_module_path(import_name: str, base_dir: Path) -> Optional[Path]:
+    candidate = base_dir / f"{import_name}.py"
+    return candidate if candidate.exists() else None
+
+
+def import_names_from_python_file(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -251,6 +257,29 @@ def import_names_from_app(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
     return names
+
+
+def dashboard_import_names(entry_path: Path) -> set[str]:
+    """Collect imports from app.py and same-directory dashboard modules it imports."""
+    base_dir = entry_path.parent
+    imports: set[str] = set()
+    visited: set[Path] = set()
+    pending = [entry_path]
+
+    while pending:
+        path = pending.pop()
+        resolved = path.resolve()
+        if resolved in visited or not path.exists():
+            continue
+        visited.add(resolved)
+        names = import_names_from_python_file(path)
+        imports.update(names)
+        for name in names:
+            local_path = local_module_path(name, base_dir)
+            if local_path is not None:
+                pending.append(local_path)
+
+    return imports
 
 
 def requirement_names(path: Path) -> set[str]:
@@ -269,7 +298,7 @@ def requirement_names(path: Path) -> set[str]:
 def check_dashboard_requirements(failures: list[str]) -> None:
     if not DASHBOARD_APP_PATH.exists() or not DASHBOARD_REQUIREMENTS_PATH.exists():
         return
-    app_imports = import_names_from_app(DASHBOARD_APP_PATH)
+    app_imports = dashboard_import_names(DASHBOARD_APP_PATH)
     needed = {
         requirement
         for import_name, requirement in DASHBOARD_IMPORT_PACKAGE_NAMES.items()
