@@ -1,4 +1,6 @@
 import json
+from html import escape
+from textwrap import dedent
 
 import pandas as pd
 import streamlit as st
@@ -91,6 +93,186 @@ def feature_family_count_frame(feature_families: dict) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("Available features", ascending=False)
 
 
+FEATURE_GROUP_ORDER = [
+    "Ridership History",
+    "Service History",
+    "Seasonality And Time",
+    "Regime Signals",
+    "Economic Context",
+    "Interactions",
+    "Other",
+]
+
+
+def feature_group_label(feature_name: str) -> str:
+    name = str(feature_name)
+    lower_name = name.lower()
+    if "_x_" in lower_name:
+        return "Interactions"
+    if lower_name.startswith("upt_"):
+        return "Ridership History"
+    if lower_name.startswith(("vrm", "vrh", "voms")):
+        return "Service History"
+    if (
+        lower_name.startswith(("month_", "target_month_", "time_index"))
+        or "months_since" in lower_name
+    ):
+        return "Seasonality And Time"
+    if "pandemic" in lower_name or "covid" in lower_name or "regime" in lower_name:
+        return "Regime Signals"
+    if any(token in lower_name for token in ["gas", "cpi", "income", "inflation"]):
+        return "Economic Context"
+    return "Other"
+
+
+def grouped_feature_names(feature_names: list[str]) -> dict[str, list[str]]:
+    groups = {group: [] for group in FEATURE_GROUP_ORDER}
+    for feature_name in feature_names:
+        groups.setdefault(feature_group_label(feature_name), []).append(feature_name)
+    return {group: features for group, features in groups.items() if features}
+
+
+def feature_chip_grid_html(feature_names: list[str]) -> str:
+    groups = grouped_feature_names(feature_names)
+    group_blocks = []
+    for group_name, group_features in groups.items():
+        chips = "\n".join(
+            f'<span class="feature-definition-chip" title="{escape(feature_name)}">'
+            f"{escape(feature_name)}</span>"
+            for feature_name in group_features
+        )
+        feature_word = "feature" if len(group_features) == 1 else "features"
+        group_blocks.append(
+            dedent(f"""
+            <section class="feature-definition-group">
+                <div class="feature-definition-group-title">
+                    <span>{escape(group_name)}</span>
+                    <span>{len(group_features)} {feature_word}</span>
+                </div>
+                <div class="feature-definition-chip-grid">
+                    {chips}
+                </div>
+            </section>
+            """).strip()
+        )
+    return (
+        dedent("""
+        <style>
+        .feature-definition-panel {
+            border-top: 3px solid rgba(0, 127, 104, 0.28);
+            background: #f8fbfa;
+            padding: 0.95rem 1rem 1.05rem;
+            margin: 0.45rem 0 1rem;
+        }
+
+        .feature-definition-group {
+            margin: 0 0 0.95rem;
+        }
+
+        .feature-definition-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .feature-definition-group-title {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            color: #2f323a;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 0.42rem;
+        }
+
+        .feature-definition-group-title span:last-child {
+            color: #6b7280;
+            font-size: 0.78rem;
+            font-weight: 650;
+            letter-spacing: 0;
+            text-transform: none;
+            white-space: nowrap;
+        }
+
+        .feature-definition-chip-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.38rem 0.48rem;
+            align-items: flex-start;
+        }
+
+        .feature-definition-chip {
+            display: inline-flex;
+            max-width: min(100%, 32rem);
+            border: 1px solid rgba(0, 127, 104, 0.13);
+            border-radius: 0.42rem;
+            background: #f1f5f4;
+            color: #04783e;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+            font-size: 0.84rem;
+            line-height: 1.28;
+            padding: 0.22rem 0.48rem;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        @media (max-width: 760px) {
+            .feature-definition-panel {
+                padding: 0.85rem 0.75rem;
+            }
+
+            .feature-definition-chip {
+                font-size: 0.78rem;
+                max-width: 100%;
+            }
+        }
+        </style>
+        <div class="feature-definition-panel">
+        """).strip()
+        + "\n".join(group_blocks)
+        + "\n</div>"
+    )
+
+
+def render_feature_types_section() -> None:
+    st.markdown("### Feature Types")
+    feature_type_rows = [
+        {
+            "Feature type": "Lagged ridership",
+            "Examples": "upt_lag1, upt_lag3, upt_lag12",
+            "Purpose": "Give models recent momentum and same-month-last-year context.",
+        },
+        {
+            "Feature type": "Rolling history",
+            "Examples": "rolling means, rolling changes, recent trend summaries",
+            "Purpose": "Smooth noisy month-to-month movement and expose trajectory.",
+        },
+        {
+            "Feature type": "Time and seasonality",
+            "Examples": "time_index_months, month_sin, month_cos, target_month_sin",
+            "Purpose": "Represent long-run trend and recurring calendar pattern.",
+        },
+        {
+            "Feature type": "Regime indicators",
+            "Examples": "pandemic_observed, pandemic_disruption_active, months_since_pandemic_observed",
+            "Purpose": "Let models distinguish ordinary history from known disruption and recovery periods.",
+        },
+        {
+            "Feature type": "Exogenous context",
+            "Examples": "gas price, CPI, core CPI, income growth",
+            "Purpose": "Test whether external economic pressure improves forecasts.",
+        },
+        {
+            "Feature type": "Targeted interactions",
+            "Examples": "income_yoy_pct_x_gas_price_yoy_diff, lag_x_pandemic flags",
+            "Purpose": "Let linear models express selected non-additive relationships without a full polynomial explosion.",
+        },
+    ]
+    st.dataframe(pd.DataFrame(feature_type_rows), width="stretch", hide_index=True)
+
+
 def render_feature_family_sections(family_summary: pd.DataFrame, feature_families: dict) -> None:
     st.markdown("### Feature Family Examples")
     if {"feature_family_name", "best_selection_score"}.issubset(family_summary.columns):
@@ -164,9 +346,7 @@ def render_feature_family_sections(family_summary: pd.DataFrame, feature_familie
         feature_count = len(selected_features)
         feature_word = "feature" if feature_count == 1 else "features"
         st.caption(f"{feature_count} {feature_word} included")
-        feature_cols = st.columns(4)
-        for index, feature_name in enumerate(selected_features):
-            feature_cols[index % len(feature_cols)].markdown(f"- `{feature_name}`")
+        st.markdown(feature_chip_grid_html(selected_features), unsafe_allow_html=True)
 
         with st.expander("Show the feature family definition JSON"):
             st.code(json.dumps(feature_families, indent=2), language="json")
@@ -176,42 +356,6 @@ def render_feature_family_sections(family_summary: pd.DataFrame, feature_familie
             "For local runs, the dashboard looks for "
             f"`{DEFAULT_FEATURE_FAMILIES_PATH}` or the `FEATURE_FAMILIES_PATH` environment variable."
         )
-
-    st.markdown("### Feature Types")
-    feature_type_rows = [
-        {
-            "Feature type": "Lagged ridership",
-            "Examples": "upt_lag1, upt_lag3, upt_lag12",
-            "Purpose": "Give models recent momentum and same-month-last-year context.",
-        },
-        {
-            "Feature type": "Rolling history",
-            "Examples": "rolling means, rolling changes, recent trend summaries",
-            "Purpose": "Smooth noisy month-to-month movement and expose trajectory.",
-        },
-        {
-            "Feature type": "Time and seasonality",
-            "Examples": "time_index_months, month_sin, month_cos, target_month_sin",
-            "Purpose": "Represent long-run trend and recurring calendar pattern.",
-        },
-        {
-            "Feature type": "Regime indicators",
-            "Examples": "pandemic_observed, pandemic_disruption_active, months_since_pandemic_observed",
-            "Purpose": "Let models distinguish ordinary history from known disruption and recovery periods.",
-        },
-        {
-            "Feature type": "Exogenous context",
-            "Examples": "gas price, CPI, core CPI, income growth",
-            "Purpose": "Test whether external economic pressure improves forecasts.",
-        },
-        {
-            "Feature type": "Targeted interactions",
-            "Examples": "income_yoy_pct_x_gas_price_yoy_diff, lag_x_pandemic flags",
-            "Purpose": "Let linear models express selected non-additive relationships without a full polynomial explosion.",
-        },
-    ]
-    st.dataframe(pd.DataFrame(feature_type_rows), width="stretch", hide_index=True)
-
 
 def render_experiment_page(
     family_summary: pd.DataFrame,
@@ -276,6 +420,7 @@ def render_experiment_page(
         unsafe_allow_html=True,
     )
 
+    render_feature_types_section()
     render_feature_family_sections(family_summary, feature_families)
 
     st.markdown("### Feature Policies")
@@ -467,4 +612,3 @@ def render_experiment_page(
         st.warning(f"Could not find `{PHASE_C_MONTHLY_CONFIG_PATH}`.")
 
     st.markdown(experiment_overview_with_regime_note())
-

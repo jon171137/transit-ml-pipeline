@@ -1,5 +1,8 @@
 """Model Explorer page for interactive result inspection."""
 
+import json
+import math
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +55,588 @@ from model_helpers import (
     sort_by_rank_metric,
 )
 from ui_components import champion_summary_item
+
+
+SENSITIVITY_FEATURE_VARIABLES = {
+    "Input feature count": "n_input_features",
+    "Selected feature count": "n_selected_features",
+    "Representation feature count": "n_representation_features",
+    "Feature reduction ratio": "feature_reduction_ratio",
+    "Sequence length": "sequence_length",
+    "Model size proxy": "model_size_proxy",
+    "Complexity score": "complexity_score",
+    "Compute score": "compute_score",
+    "Interpretability score": "interpretability_score",
+    "Average train seconds": "avg_train_seconds",
+    "Total train seconds": "total_train_seconds",
+    "Model run count": "model_run_count",
+    "Refit count": "refit_count",
+}
+
+SENSITIVITY_COLOR_VARIABLES = {
+    "Feature family": "feature_family_name",
+    "Feature policy": "feature_policy",
+    "Feature transform": "feature_transform_label",
+    "Mode": "mode",
+}
+
+SENSITIVITY_Y_SLICE_OPTIONS = {
+    "All scores": 1.0,
+    "Best 99%": 0.99,
+    "Best 95%": 0.95,
+    "Best 90%": 0.90,
+    "Best 75%": 0.75,
+    "Best 50%": 0.50,
+    "Best 25%": 0.25,
+    "Best 10%": 0.10,
+}
+
+HYPERPARAMETER_DISPLAY_OVERRIDES = {
+    "alpha": "alpha",
+    "l1_ratio": "L1 ratio",
+    "max_iter": "max iterations",
+    "n_estimators": "number of estimators",
+    "max_depth": "max depth",
+    "max_features": "max features",
+    "min_samples_leaf": "min samples leaf",
+    "min_child_weight": "min child weight",
+    "learning_rate": "learning rate",
+    "subsample": "subsample",
+    "colsample_bytree": "column sample by tree",
+    "batch_size": "batch size",
+    "dropout": "dropout",
+    "weight_decay": "weight decay",
+    "sequence_length": "sequence length",
+    "recurrent_hidden_sizes": "recurrent hidden sizes",
+    "dense_head_sizes": "dense head sizes",
+    "dense_head_dropouts": "dense head dropouts",
+    "pre_head_dropout": "pre-head dropout",
+    "inter_recurrent_dropouts": "inter-recurrent dropouts",
+    "early_stopping_patience": "early stopping patience",
+    "validation_rows": "validation rows",
+    "max_epochs": "max epochs",
+    "lr_factor": "LR factor",
+    "lr_patience": "LR patience",
+    "min_lr": "minimum LR",
+}
+
+
+def safe_hyperparameter_name(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", str(name)).strip("_").lower()
+
+
+def compact_hyperparameter_value(value) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(compact_hyperparameter_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def numeric_list(value) -> list[float]:
+    if not isinstance(value, list):
+        return []
+    numeric_values = []
+    for item in value:
+        if isinstance(item, bool):
+            numeric_values.append(float(item))
+        elif isinstance(item, (int, float)):
+            numeric_values.append(float(item))
+    return numeric_values
+
+
+def parse_hyperparameter_record(raw_value) -> dict:
+    if raw_value is None or raw_value == "":
+        return {}
+    if isinstance(raw_value, float) and pd.isna(raw_value):
+        return {}
+    if isinstance(raw_value, dict):
+        params = raw_value
+    else:
+        try:
+            params = json.loads(str(raw_value))
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    if not isinstance(params, dict):
+        return {}
+
+    record = {}
+    for raw_key, value in params.items():
+        key = safe_hyperparameter_name(raw_key)
+        if not key:
+            continue
+        column = f"hp_{key}"
+        values = numeric_list(value)
+        if values:
+            record[column] = compact_hyperparameter_value(value)
+            record[f"{column}_first"] = values[0]
+            record[f"{column}_total"] = sum(values)
+            record[f"{column}_max"] = max(values)
+            record[f"{column}_count"] = len(values)
+        elif isinstance(value, (int, float, bool)) and not isinstance(value, bool):
+            record[column] = value
+        elif isinstance(value, bool):
+            record[column] = str(value)
+        else:
+            record[column] = compact_hyperparameter_value(value)
+    return record
+
+
+def format_sensitivity_value(value) -> str:
+    if pd.isna(value):
+        return "-"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric.is_integer():
+        return format_int(numeric)
+    if abs(numeric) < 0.01:
+        return f"{numeric:.4g}"
+    if abs(numeric) < 1:
+        return f"{numeric:.3f}".rstrip("0").rstrip(".")
+    return f"{numeric:,.2f}".rstrip("0").rstrip(".")
+
+
+def add_hyperparameter_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "hyperparameters_json" not in frame.columns:
+        return frame.copy()
+    records = [parse_hyperparameter_record(value) for value in frame["hyperparameters_json"]]
+    param_frame = pd.DataFrame(records, index=frame.index)
+    if param_frame.empty:
+        return frame.copy()
+    return pd.concat([frame.copy(), param_frame], axis=1)
+
+
+def join_complexity_columns(leaderboard: pd.DataFrame, complexity_profile: Optional[pd.DataFrame]) -> pd.DataFrame:
+    out = leaderboard.copy()
+    if complexity_profile is None or complexity_profile.empty:
+        return out
+    key = "model_config_id" if "model_config_id" in out and "model_config_id" in complexity_profile else "config_id"
+    if key not in out or key not in complexity_profile:
+        return out
+    extra_columns = [
+        "avg_train_seconds",
+        "total_train_seconds",
+        "model_run_count",
+        "refit_count",
+        "avg_n_train",
+        "min_selected_features",
+        "max_selected_features",
+    ]
+    extra_columns = [column for column in extra_columns if column in complexity_profile and column not in out]
+    if not extra_columns:
+        return out
+    extras = complexity_profile[[key, *extra_columns]].drop_duplicates(subset=[key])
+    return out.merge(extras, on=key, how="left")
+
+
+def is_varied(series: pd.Series) -> bool:
+    return series.dropna().astype(str).nunique() > 1
+
+
+def is_mostly_numeric(series: pd.Series) -> bool:
+    non_null = series.dropna()
+    if non_null.empty:
+        return False
+    converted = pd.to_numeric(non_null, errors="coerce")
+    return converted.notna().mean() >= 0.9
+
+
+def hyperparameter_label(column: str) -> str:
+    raw_name = column.removeprefix("hp_")
+    suffix_label = ""
+    for suffix, label in [
+        ("_first", "first"),
+        ("_total", "total"),
+        ("_max", "max"),
+        ("_count", "count"),
+    ]:
+        if raw_name.endswith(suffix):
+            raw_name = raw_name[: -len(suffix)]
+            suffix_label = f" ({label})"
+            break
+    display_name = HYPERPARAMETER_DISPLAY_OVERRIDES.get(raw_name, raw_name.replace("_", " "))
+    return f"Hyperparameter: {display_name}{suffix_label}"
+
+
+def sensitivity_axis_options(frame: pd.DataFrame) -> dict[str, str]:
+    options = {}
+    hyperparameter_columns = [
+        column
+        for column in frame.columns
+        if column.startswith("hp_") and is_varied(frame[column])
+    ]
+    hyperparameter_columns = sorted(
+        hyperparameter_columns,
+        key=lambda column: (
+            0 if is_mostly_numeric(frame[column]) else 1,
+            hyperparameter_label(column),
+        ),
+    )
+    for column in hyperparameter_columns:
+        options[hyperparameter_label(column)] = column
+    for label, column in SENSITIVITY_FEATURE_VARIABLES.items():
+        if column in frame and is_varied(frame[column]):
+            options[label] = column
+    return options
+
+
+def sensitivity_color_options(frame: pd.DataFrame) -> dict[str, str]:
+    options = {"None": ""}
+    for label, column in SENSITIVITY_COLOR_VARIABLES.items():
+        if column in frame and is_varied(frame[column]):
+            options[label] = column
+    for column in sorted([col for col in frame.columns if col.startswith("hp_")]):
+        if column in frame and is_varied(frame[column]) and frame[column].dropna().astype(str).nunique() <= 12:
+            options[hyperparameter_label(column)] = column
+    return options
+
+
+def sensitivity_size_options(frame: pd.DataFrame) -> dict[str, str]:
+    options = {"None": ""}
+    for label, column in SENSITIVITY_FEATURE_VARIABLES.items():
+        if column not in frame or not is_varied(frame[column]):
+            continue
+        numeric = pd.to_numeric(frame[column], errors="coerce")
+        if numeric.notna().any() and numeric.max() > 0:
+            options[label] = column
+    return options
+
+
+def default_sensitivity_x_label(options: dict[str, str]) -> str:
+    preferred_fragments = [
+        "alpha",
+        "learning rate",
+        "max depth",
+        "number of estimators",
+        "recurrent hidden sizes (total)",
+        "dense head sizes (total)",
+        "Selected feature count",
+    ]
+    for fragment in preferred_fragments:
+        for label in options:
+            if fragment.lower() in label.lower():
+                return label
+    return next(iter(options))
+
+
+def sensitivity_hover_columns(frame: pd.DataFrame, selected_columns: list[str]) -> list[str]:
+    columns = [
+        "model_config_id",
+        "model_build_label",
+        "feature_family_name",
+        "feature_policy",
+        "feature_transform_label",
+        "mode",
+        "mae",
+        "rmse",
+        "r2",
+        "selection_score_balanced",
+        "n_selected_features",
+        "n_representation_features",
+        "complexity_score",
+        "compute_score",
+        *selected_columns,
+    ]
+    seen = set()
+    available = []
+    for column in columns:
+        if column in frame and column not in seen:
+            available.append(column)
+            seen.add(column)
+    return available
+
+
+def sensitivity_relationship_chart(
+    frame: pd.DataFrame,
+    x_label: str,
+    x_col: str,
+    y_label: str,
+    y_col: str,
+    color_label: str,
+    color_col: str,
+    size_label: str,
+    size_col: str,
+):
+    plot_frame = frame.dropna(subset=[x_col, y_col]).copy()
+    if plot_frame.empty:
+        fig = px.scatter(pd.DataFrame({"x": [], "y": []}), x="x", y="y")
+        fig.update_layout(title="No matching build-sensitivity points")
+        return fig
+
+    x_numeric = is_mostly_numeric(plot_frame[x_col])
+    x_unique = plot_frame[x_col].dropna().astype(str).nunique()
+    color_arg = color_col if color_col and color_col in plot_frame.columns else None
+    size_arg = None
+    if size_col and size_col in plot_frame.columns and x_numeric and x_unique > 12:
+        plot_frame[size_col] = pd.to_numeric(plot_frame[size_col], errors="coerce")
+        if plot_frame[size_col].notna().any() and plot_frame[size_col].max() > 0:
+            size_arg = size_col
+
+    selected_hover_columns = [col for col in [x_col, color_col, size_col] if col]
+    hover_columns = sensitivity_hover_columns(plot_frame, selected_hover_columns)
+
+    if x_numeric and x_unique > 12:
+        plot_frame[x_col] = pd.to_numeric(plot_frame[x_col], errors="coerce")
+        fig = px.scatter(
+            plot_frame,
+            x=x_col,
+            y=y_col,
+            color=color_arg,
+            size=size_arg,
+            hover_data=hover_columns,
+            labels={
+                x_col: x_label,
+                y_col: y_label,
+                color_col: color_label,
+                size_col: size_label,
+            },
+        )
+    else:
+        x_display_col = "_sensitivity_x_display"
+        if x_numeric:
+            numeric_values = pd.to_numeric(plot_frame[x_col], errors="coerce")
+            plot_frame[x_display_col] = numeric_values.map(format_sensitivity_value)
+            category_order = [
+                format_sensitivity_value(value)
+                for value in sorted(numeric_values.dropna().unique())
+            ]
+        else:
+            plot_frame[x_display_col] = plot_frame[x_col].astype(str)
+            category_order = sorted(plot_frame[x_display_col].dropna().unique())
+        fig = px.strip(
+            plot_frame,
+            x=x_display_col,
+            y=y_col,
+            color=color_arg,
+            hover_data=hover_columns,
+            category_orders={x_display_col: category_order},
+            labels={
+                x_display_col: x_label,
+                y_col: y_label,
+                color_col: color_label,
+            },
+            stripmode="overlay",
+        )
+    fig.update_traces(marker=dict(opacity=0.74, line=dict(width=0.5, color="white")))
+    fig.update_layout(
+        title=f"{y_label} by {x_label}",
+        hovermode="closest",
+        margin=dict(l=10, r=10, t=50, b=60),
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font=dict(color="#2f323a"),
+    )
+    return fig
+
+
+def sensitivity_summary_frame(
+    frame: pd.DataFrame,
+    x_label: str,
+    x_col: str,
+    y_label: str,
+    y_col: str,
+    metric_ascending: bool,
+) -> pd.DataFrame:
+    if frame.empty or x_col not in frame or y_col not in frame:
+        return pd.DataFrame()
+    summary_source = frame.dropna(subset=[x_col, y_col]).copy()
+    if summary_source.empty:
+        return pd.DataFrame()
+
+    x_numeric = is_mostly_numeric(summary_source[x_col])
+    if x_numeric:
+        numeric_x = pd.to_numeric(summary_source[x_col], errors="coerce")
+        unique_count = numeric_x.dropna().nunique()
+        if unique_count > 12:
+            bin_count = min(6, unique_count)
+            summary_source["_x_group"] = pd.qcut(numeric_x, q=bin_count, duplicates="drop").astype(str)
+            group_label = f"{x_label} range"
+        else:
+            summary_source["_x_group"] = numeric_x.map(format_sensitivity_value)
+            group_label = x_label
+    else:
+        summary_source["_x_group"] = summary_source[x_col].astype(str)
+        group_label = x_label
+
+    agg_kwargs = {
+        "configurations": (y_col, "size"),
+        f"best_{y_col}": (y_col, "min" if metric_ascending else "max"),
+        f"median_{y_col}": (y_col, "median"),
+    }
+    if "mae" in summary_source:
+        agg_kwargs["best_mae"] = ("mae", "min")
+        agg_kwargs["median_mae"] = ("mae", "median")
+    if "n_selected_features" in summary_source:
+        agg_kwargs["median_selected_features"] = ("n_selected_features", "median")
+    if "complexity_score" in summary_source:
+        agg_kwargs["median_complexity_score"] = ("complexity_score", "median")
+
+    summary = summary_source.groupby("_x_group", dropna=False).agg(**agg_kwargs).reset_index()
+    summary = summary.rename(
+        columns={
+            "_x_group": group_label,
+            f"best_{y_col}": f"Best {y_label}",
+            f"median_{y_col}": f"Median {y_label}",
+            "best_mae": "Best MAE",
+            "median_mae": "Median MAE",
+            "median_selected_features": "Median selected features",
+            "median_complexity_score": "Median complexity score",
+            "configurations": "Configurations",
+        }
+    )
+    sort_col = f"Best {y_label}"
+    return summary.sort_values(sort_col, ascending=metric_ascending)
+
+
+def apply_sensitivity_y_slice(
+    frame: pd.DataFrame,
+    y_col: str,
+    metric_ascending: bool,
+    slice_label: str,
+) -> pd.DataFrame:
+    if frame.empty or slice_label == "All scores":
+        return frame
+    keep_share = SENSITIVITY_Y_SLICE_OPTIONS.get(slice_label, 1.0)
+    if keep_share >= 1.0:
+        return frame
+    ranked = frame.dropna(subset=[y_col]).sort_values(y_col, ascending=metric_ascending).copy()
+    keep_count = max(1, math.ceil(len(ranked) * keep_share))
+    return ranked.head(keep_count)
+
+
+def render_build_sensitivity_inspector(
+    leaderboard: pd.DataFrame,
+    complexity_profile: Optional[pd.DataFrame],
+    metric_options: list[str],
+) -> None:
+    st.subheader("Build Sensitivity Inspector")
+    st.write(
+        "Inspect one model build at a time to see how configuration choices line up "
+        "with scoring metrics. This view uses config-level leaderboard metadata and "
+        "does not load path-level forecast rows."
+    )
+    if leaderboard.empty or "model_build_label" not in leaderboard:
+        st.info("No model-build metadata is available for sensitivity inspection.")
+        return
+
+    sensitivity_base = add_hyperparameter_columns(join_complexity_columns(leaderboard, complexity_profile))
+    build_options = ordered_model_build_labels(sensitivity_base)
+    if not build_options:
+        st.info("No model builds are available for sensitivity inspection.")
+        return
+
+    build_cols = st.columns([1.35, 0.9, 0.9, 0.95, 0.8])
+    selected_build = build_cols[0].selectbox(
+        "Model build",
+        build_options,
+        key="sensitivity_model_build",
+    )
+    build_frame = sensitivity_base[sensitivity_base["model_build_label"].astype(str).eq(selected_build)].copy()
+    y_metric = build_cols[1].selectbox(
+        "Y metric",
+        metric_options,
+        index=selectbox_index(metric_options, "MAE"),
+        key="sensitivity_y_metric",
+    )
+    y_score_slice = build_cols[2].selectbox(
+        "Y score slice",
+        list(SENSITIVITY_Y_SLICE_OPTIONS),
+        index=0,
+        key="sensitivity_y_score_slice",
+        help=(
+            "Keeps the best share of configurations by the selected Y metric. "
+            "For error metrics this keeps the lowest values; for R-squared and "
+            "directional accuracy it keeps the highest values."
+        ),
+    )
+    rank_metric = build_cols[3].selectbox(
+        "Rank slice by",
+        metric_options,
+        index=selectbox_index(metric_options, "Balanced score"),
+        key="sensitivity_rank_metric",
+    )
+    top_total = build_cols[4].selectbox(
+        "Configs shown",
+        TOTAL_LIMIT_OPTIONS,
+        index=selectbox_index(TOTAL_LIMIT_OPTIONS, "Top 100"),
+        key="sensitivity_total_limit",
+    )
+
+    ranked_frame = limit_total_configs(build_frame, rank_metric, top_total)
+    axis_options = sensitivity_axis_options(ranked_frame)
+    if not axis_options:
+        st.info("The selected model build does not have varying hyperparameter or feature-size fields to plot.")
+        return
+
+    x_default = default_sensitivity_x_label(axis_options)
+    relationship_cols = st.columns([1.45, 1.1, 1.0])
+    x_label = relationship_cols[0].selectbox(
+        "X variable",
+        list(axis_options),
+        index=selectbox_index(list(axis_options), x_default),
+        key="sensitivity_x_variable",
+    )
+    color_options = sensitivity_color_options(ranked_frame)
+    color_label = relationship_cols[1].selectbox(
+        "Color by",
+        list(color_options),
+        index=0,
+        key="sensitivity_color_by",
+    )
+    size_options = sensitivity_size_options(ranked_frame)
+    size_default = "Selected feature count" if "Selected feature count" in size_options else "None"
+    size_label = relationship_cols[2].selectbox(
+        "Size by",
+        list(size_options),
+        index=selectbox_index(list(size_options), size_default),
+        key="sensitivity_size_by",
+    )
+
+    y_col, metric_ascending = RANK_METRIC_OPTIONS[y_metric]
+    x_col = axis_options[x_label]
+    color_col = color_options[color_label]
+    size_col = size_options[size_label]
+    if y_col not in ranked_frame:
+        st.info(f"`{y_metric}` is not available for this model build.")
+        return
+    chart_frame_full = ranked_frame.dropna(subset=[x_col, y_col]).copy()
+    chart_frame = apply_sensitivity_y_slice(
+        chart_frame_full,
+        y_col,
+        metric_ascending,
+        y_score_slice,
+    )
+    if chart_frame.empty:
+        st.info("No model configurations match the selected sensitivity controls.")
+        return
+
+    st.caption(
+        f"Showing {format_int(len(chart_frame))} of {format_int(len(chart_frame_full))} "
+        f"`{selected_build}` configuration(s). "
+        f"Y score slice: `{y_score_slice}`. "
+        "Lower is better for error metrics; higher is better for R-squared and directional accuracy."
+    )
+    st.plotly_chart(
+        sensitivity_relationship_chart(
+            chart_frame,
+            x_label,
+            x_col,
+            y_metric,
+            y_col,
+            color_label,
+            color_col,
+            size_label,
+            size_col,
+        ),
+        width="stretch",
+    )
+    summary = sensitivity_summary_frame(chart_frame, x_label, x_col, y_metric, y_col, metric_ascending)
+    if not summary.empty:
+        st.markdown("**Grouped sensitivity summary**")
+        render_metric_dataframe(summary, max_rows=30, max_visible_rows=10)
 
 
 def render_champion_snapshot(
@@ -754,6 +1339,7 @@ def render_model_explorer_page(
         ]
         available_mapping_cols = [column for column in table_cols if column in mapping_frame.columns]
         render_metric_dataframe(mapping_frame[available_mapping_cols], max_rows=200)
+    render_build_sensitivity_inspector(candidate_leaderboard, complexity_profile, metric_options)
     render_operational_footprint(complexity_profile, filtered_top)
     st.markdown("**Loaded Artifacts**")
     st.code(str(run_dir), language="text")
