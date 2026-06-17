@@ -735,6 +735,101 @@ def dashboard_correlation_matrices() -> dict[str, pd.DataFrame]:
     return {name: matrix.corr(method="pearson") for name, matrix in transformed.items()}
 
 
+def correlation_value(matrix: pd.DataFrame, row: str, column: str) -> str:
+    if row not in matrix.index or column not in matrix.columns:
+        return "n/a"
+    value = matrix.loc[row, column]
+    if pd.isna(value):
+        return "n/a"
+    return f"{float(value):.2f}"
+
+
+def correlation_matrix_interpretation(title: str, matrix: pd.DataFrame) -> str:
+    """Return audience-facing notes for each transformed Pearson matrix."""
+    if title == "First Differences":
+        upt_vrh = correlation_value(matrix, "UPT", "VRH")
+        upt_vrm = correlation_value(matrix, "UPT", "VRM")
+        vrm_vrh = correlation_value(matrix, "VRM", "VRH")
+        gas_cpi = correlation_value(matrix, "Gas price", "CPI all")
+        return f"""
+        <div class="eda-chart-panel">
+            <h4>What stands out in this view</h4>
+            <p>
+                First differences compare one-month changes in each series. In this
+                view, UPT moves most closely with service hours
+                (<strong>UPT-VRH r = {upt_vrh}</strong>) and somewhat with service miles
+                (<strong>UPT-VRM r = {upt_vrm}</strong>). VRM and VRH also move together
+                strongly (<strong>r = {vrm_vrh}</strong>), which makes sense because
+                both describe service supply.
+            </p>
+            <p>
+                The economic signals are less directly tied to short-run UPT movement
+                here. Gas price and CPI move together more strongly
+                (<strong>r = {gas_cpi}</strong>) than either moves with ridership, so
+                this matrix is mostly useful for seeing immediate service-ridership
+                co-movement rather than broad macro effects.
+            </p>
+        </div>
+        """
+    if title == "YoY Percent Changes":
+        upt_cpi_all = correlation_value(matrix, "UPT", "CPI all")
+        upt_cpi_core = correlation_value(matrix, "UPT", "CPI core")
+        upt_gas = correlation_value(matrix, "UPT", "Gas price")
+        upt_voms = correlation_value(matrix, "UPT", "VOMS")
+        gas_cpi = correlation_value(matrix, "Gas price", "CPI all")
+        return f"""
+        <div class="eda-chart-panel">
+            <h4>What stands out in this view</h4>
+            <p>
+                Year-over-year percent changes compare each month against the same
+                month one year earlier, which reduces ordinary seasonality. This is
+                where the CPI relationship is most visible:
+                <strong>UPT-CPI all r = {upt_cpi_all}</strong> and
+                <strong>UPT-CPI core r = {upt_cpi_core}</strong>. Gas prices
+                (<strong>r = {upt_gas}</strong>) and VOMS
+                (<strong>r = {upt_voms}</strong>) are also moderately associated with
+                UPT growth in this transformed view.
+            </p>
+            <p>
+                This should not be read as "inflation causes ridership to rise."
+                YoY changes reduce seasonality, but they can still reflect shared
+                regime timing: reopening, service restoration, macro recovery, and
+                the post-COVID ridership reset. The strong gas-CPI relationship
+                (<strong>r = {gas_cpi}</strong>) is a reminder that several external
+                indicators are moving through the same economic period together.
+            </p>
+        </div>
+        """
+    if title == "Trend + Month Residuals":
+        upt_vrh = correlation_value(matrix, "UPT", "VRH")
+        upt_voms = correlation_value(matrix, "UPT", "VOMS")
+        upt_cpi_all = correlation_value(matrix, "UPT", "CPI all")
+        upt_cpi_core = correlation_value(matrix, "UPT", "CPI core")
+        cpi_pair = correlation_value(matrix, "CPI all", "CPI core")
+        return f"""
+        <div class="eda-chart-panel">
+            <h4>What stands out in this view</h4>
+            <p>
+                This view subtracts a simple time trend and calendar-month pattern
+                from each series before calculating Pearson correlations. After that
+                adjustment, service context remains more visibly related to UPT
+                residual movement: <strong>UPT-VRH r = {upt_vrh}</strong> and
+                <strong>UPT-VOMS r = {upt_voms}</strong>.
+            </p>
+            <p>
+                The CPI relationship changes direction after this adjustment
+                (<strong>UPT-CPI all r = {upt_cpi_all}</strong>,
+                <strong>UPT-CPI core r = {upt_cpi_core}</strong>). That contrast with
+                the YoY matrix is useful: it suggests the CPI association is partly
+                about shared time/regime movement, not a stable direct relationship.
+                CPI all and core remain highly related to each other
+                (<strong>r = {cpi_pair}</strong>), as expected.
+            </p>
+        </div>
+        """
+    return ""
+
+
 def render_data_page(
     family_summary: pd.DataFrame,
     leaderboard: pd.DataFrame,
@@ -828,6 +923,7 @@ def render_data_page(
         for tab_panel, (title, matrix) in zip(matrix_tabs, corr_matrices.items()):
             with tab_panel:
                 st.plotly_chart(correlation_heatmap_figure(matrix, title), use_container_width=True)
+                st.markdown(correlation_matrix_interpretation(title, matrix), unsafe_allow_html=True)
 
     granger_screening = granger_predictive_screening()
     if not granger_screening.empty:

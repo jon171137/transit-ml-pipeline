@@ -170,6 +170,7 @@ The public bundle has two layers:
 | Full lightweight metadata | `model_leaderboard_full.parquet`, `complexity_profile_full.parquet`, `feature_family_summary_full.parquet` | Lets the dashboard filter and compare the full public experiment index. |
 | Curated flat compatibility files | `forecast_paths.parquet`, `performance_over_time.parquet`, `model_leaderboard.parquet` | Fast initial loading and backward-compatible dashboard views. |
 | Partitioned full path rows | `forecast_paths_by_build/`, `performance_over_time_by_build/` | On-demand path/performance loading after filters are applied. |
+| EDA inputs | `eda_inputs/integrated_monthly_base.parquet`, `eda_inputs/feature_table.parquet`, `eda_inputs/imputation_log.parquet` | Public Data-page source-series, correlation, missingness, and imputation summaries. |
 | Manifests | `experiment_manifest.json`, `public_bundle_manifest.json`, `path_partition_manifest.json` | Documents curation rules, source counts, and partition layout. |
 
 The committed public bundle is intentionally allowed in git:

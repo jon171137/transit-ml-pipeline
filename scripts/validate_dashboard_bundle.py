@@ -41,6 +41,12 @@ REQUIRED_OPTIONAL_FOR_FULL_BUNDLE = {
     "experiment_manifest": "experiment_manifest.json",
 }
 
+REQUIRED_EDA_INPUTS = {
+    "integrated_monthly_base": "eda_inputs/integrated_monthly_base.parquet",
+    "feature_table": "eda_inputs/feature_table.parquet",
+    "imputation_log": "eda_inputs/imputation_log.parquet",
+}
+
 REQUIRED_COLUMNS = {
     "model_leaderboard.parquet": {
         "model_config_id",
@@ -136,6 +142,51 @@ def check_required_files(bundle_dir: Path, failures: list[str]) -> None:
             fail(f"Missing current public-bundle {label}: {path}", failures)
         else:
             ok(f"Found current public-bundle {label}: {filename}")
+
+    for label, filename in REQUIRED_EDA_INPUTS.items():
+        path = bundle_dir / filename
+        if not path.exists():
+            fail(f"Missing Data-page EDA input {label}: {path}", failures)
+        else:
+            ok(f"Found Data-page EDA input {label}: {filename}")
+
+
+def check_eda_inputs(bundle_dir: Path, failures: list[str]) -> None:
+    column_checks = {
+        "eda_inputs/integrated_monthly_base.parquet": {
+            "date",
+            "upt",
+            "vrm",
+            "vrh",
+            "voms",
+            "seattle_gas_price_avg",
+            "cpi_all_items_sa",
+            "cpi_core_sa",
+        },
+        "eda_inputs/feature_table.parquet": {"date", "upt", "upt_target_h3"},
+        "eda_inputs/imputation_log.parquet": set(),
+    }
+    for filename, required_columns in column_checks.items():
+        path = bundle_dir / filename
+        if not path.exists():
+            continue
+        if path.suffix != ".parquet":
+            continue
+        try:
+            columns = parquet_columns(path)
+            rows = parquet_row_count(path)
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            fail(f"Could not inspect {filename}: {exc}", failures)
+            continue
+        missing = sorted(required_columns - columns)
+        if missing:
+            fail(f"{filename} missing required columns: {', '.join(missing)}", failures)
+        else:
+            ok(f"{filename} contains required EDA columns")
+        if rows == 0 and filename != "eda_inputs/imputation_log.parquet":
+            fail(f"{filename} is empty", failures)
+        else:
+            ok(f"{filename} has {rows:,} rows")
 
 
 def check_columns(bundle_dir: Path, failures: list[str]) -> None:
@@ -338,6 +389,7 @@ def validate(bundle_dir: Path) -> int:
         ok(f"Validating dashboard bundle: {bundle_dir}")
         check_required_files(bundle_dir, failures)
         check_columns(bundle_dir, failures)
+        check_eda_inputs(bundle_dir, failures)
         check_manifest_counts(bundle_dir, failures)
         check_partition_manifest(bundle_dir, failures)
     check_dashboard_requirements(failures)
