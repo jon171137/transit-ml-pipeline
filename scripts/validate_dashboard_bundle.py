@@ -41,6 +41,12 @@ REQUIRED_OPTIONAL_FOR_FULL_BUNDLE = {
     "experiment_manifest": "experiment_manifest.json",
 }
 
+REQUIRED_EDA_INPUTS = {
+    "integrated monthly base": "integrated_monthly_base.parquet",
+    "feature table": "feature_table.parquet",
+    "imputation log": "imputation_log.parquet",
+}
+
 REQUIRED_COLUMNS = {
     "model_leaderboard.parquet": {
         "model_config_id",
@@ -136,6 +142,31 @@ def check_required_files(bundle_dir: Path, failures: list[str]) -> None:
             fail(f"Missing current public-bundle {label}: {path}", failures)
         else:
             ok(f"Found current public-bundle {label}: {filename}")
+
+    for label, filename in REQUIRED_EDA_INPUTS.items():
+        path = bundle_dir / "eda_inputs" / filename
+        if not path.exists():
+            fail(f"Missing Data-page EDA input {label}: {path}", failures)
+        else:
+            ok(f"Found Data-page EDA input {label}: eda_inputs/{filename}")
+
+
+def check_eda_inputs(bundle_dir: Path, failures: list[str]) -> None:
+    for label, filename in REQUIRED_EDA_INPUTS.items():
+        path = bundle_dir / "eda_inputs" / filename
+        if not path.exists():
+            continue
+        try:
+            rows = parquet_row_count(path)
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            fail(f"Could not read Data-page EDA input {label}: {exc}", failures)
+            continue
+        if rows <= 0 and label != "imputation log":
+            fail(f"Data-page EDA input {label} is empty", failures)
+        elif rows <= 0:
+            ok(f"Data-page EDA input {label} is readable and empty")
+        else:
+            ok(f"Data-page EDA input {label} has {rows:,} rows")
 
 
 def check_columns(bundle_dir: Path, failures: list[str]) -> None:
@@ -337,6 +368,7 @@ def validate(bundle_dir: Path) -> int:
     else:
         ok(f"Validating dashboard bundle: {bundle_dir}")
         check_required_files(bundle_dir, failures)
+        check_eda_inputs(bundle_dir, failures)
         check_columns(bundle_dir, failures)
         check_manifest_counts(bundle_dir, failures)
         check_partition_manifest(bundle_dir, failures)

@@ -37,6 +37,20 @@
   "prediction_count": 1526400,
   "public_dashboard_bundle": {
     "curation_rule": "The flat path files keep configurations in the best keep_fraction for core performance metrics, plus baseline and champion configurations. Full model metadata and full path-level rows are also exported for on-demand dashboard loading.",
+    "eda_inputs": {
+      "feature_table": {
+        "bytes": 309008,
+        "path": "eda_inputs/feature_table.parquet"
+      },
+      "imputation_log": {
+        "bytes": 2224,
+        "path": "eda_inputs/imputation_log.parquet"
+      },
+      "integrated_monthly_base": {
+        "bytes": 44209,
+        "path": "eda_inputs/integrated_monthly_base.parquet"
+      }
+    },
     "full_metadata_configurations": 8480,
     "full_path_rows": {
       "forecast_paths": 1526400,

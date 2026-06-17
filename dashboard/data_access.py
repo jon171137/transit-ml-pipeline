@@ -11,21 +11,60 @@ from constants import (
     DEFAULT_FEATURE_TABLE_PATH,
     DEFAULT_IMPUTATION_LOG_PATH,
     DEFAULT_INTEGRATED_BASE_PATH,
+    EDA_FEATURE_TABLE_FILENAME,
+    EDA_IMPUTATION_LOG_FILENAME,
+    EDA_INPUT_DIRNAME,
+    EDA_INTEGRATED_BASE_FILENAME,
+    LOCAL_FEATURE_TABLE_PATH,
+    LOCAL_IMPUTATION_LOG_PATH,
+    LOCAL_INTEGRATED_BASE_PATH,
     OPTIONAL_FILES,
     PATH_DATASET_DIRS,
     REQUIRED_FILES,
 )
 
+
+def configured_artifact_dir() -> Path:
+    return Path(os.environ.get("DASHBOARD_ARTIFACT_DIR", DEFAULT_ARTIFACT_DIR))
+
+
+def configured_eda_input_path(env_name: str, filename: str, default_path: Path, local_path: Path) -> Path:
+    if env_name in os.environ:
+        return Path(os.environ[env_name])
+
+    artifact_path = configured_artifact_dir() / EDA_INPUT_DIRNAME / filename
+    if artifact_path.exists():
+        return artifact_path
+    if default_path.exists():
+        return default_path
+    return local_path
+
+
 def configured_integrated_base_path() -> Path:
-    return Path(os.environ.get("INTEGRATED_BASE_PATH", DEFAULT_INTEGRATED_BASE_PATH))
+    return configured_eda_input_path(
+        "INTEGRATED_BASE_PATH",
+        EDA_INTEGRATED_BASE_FILENAME,
+        DEFAULT_INTEGRATED_BASE_PATH,
+        LOCAL_INTEGRATED_BASE_PATH,
+    )
 
 
 def configured_feature_table_path() -> Path:
-    return Path(os.environ.get("FEATURE_TABLE_PATH", DEFAULT_FEATURE_TABLE_PATH))
+    return configured_eda_input_path(
+        "FEATURE_TABLE_PATH",
+        EDA_FEATURE_TABLE_FILENAME,
+        DEFAULT_FEATURE_TABLE_PATH,
+        LOCAL_FEATURE_TABLE_PATH,
+    )
 
 
 def configured_imputation_log_path() -> Path:
-    return Path(os.environ.get("IMPUTATION_LOG_PATH", DEFAULT_IMPUTATION_LOG_PATH))
+    return configured_eda_input_path(
+        "IMPUTATION_LOG_PATH",
+        EDA_IMPUTATION_LOG_FILENAME,
+        DEFAULT_IMPUTATION_LOG_PATH,
+        LOCAL_IMPUTATION_LOG_PATH,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -68,10 +107,6 @@ def load_text(path: str, modified_ns: int) -> str:
 
 def file_modified_ns(path: Path) -> int:
     return path.stat().st_mtime_ns
-
-
-def configured_artifact_dir() -> Path:
-    return Path(os.environ.get("DASHBOARD_ARTIFACT_DIR", DEFAULT_ARTIFACT_DIR))
 
 
 def configured_feature_families_path() -> Path:

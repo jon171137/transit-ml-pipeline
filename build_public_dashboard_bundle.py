@@ -19,6 +19,10 @@ import pandas as pd
 DEFAULT_INPUT_DIR = Path("dashboard_artifacts/aws_streamlined/latest")
 DEFAULT_OUTPUT_DIR = Path("dashboard/public_artifacts/latest")
 DEFAULT_FEATURE_FAMILIES = Path("feature_store/income_interactions_h3_v1/feature_families.json")
+DEFAULT_INTEGRATED_BASE = Path("raw_files/integrated_monthly_base.parquet")
+DEFAULT_FEATURE_TABLE = Path("feature_store/income_interactions_h3_v1/feature_table.parquet")
+DEFAULT_IMPUTATION_LOG = Path("feature_store/income_interactions_h3_v1/imputation_log.parquet")
+EDA_INPUT_DIRNAME = "eda_inputs"
 
 REQUIRED_PARQUET = {
     "champion_predictions": "champion_predictions.parquet",
@@ -125,6 +129,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--feature-families", type=Path, default=DEFAULT_FEATURE_FAMILIES)
+    parser.add_argument("--integrated-base", type=Path, default=DEFAULT_INTEGRATED_BASE)
+    parser.add_argument("--feature-table", type=Path, default=DEFAULT_FEATURE_TABLE)
+    parser.add_argument("--imputation-log", type=Path, default=DEFAULT_IMPUTATION_LOG)
     parser.add_argument(
         "--keep-fraction",
         type=float,
@@ -381,6 +388,32 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def copy_eda_inputs(
+    output_dir: Path,
+    integrated_base: Path,
+    feature_table: Path,
+    imputation_log: Path,
+) -> dict:
+    sources = {
+        "integrated_monthly_base": (integrated_base, "integrated_monthly_base.parquet"),
+        "feature_table": (feature_table, "feature_table.parquet"),
+        "imputation_log": (imputation_log, "imputation_log.parquet"),
+    }
+    eda_dir = output_dir / EDA_INPUT_DIRNAME
+    copied = {}
+    for label, (source, filename) in sources.items():
+        if not source.exists():
+            continue
+        eda_dir.mkdir(parents=True, exist_ok=True)
+        target = eda_dir / filename
+        shutil.copy2(source, target)
+        copied[label] = {
+            "path": str(target.relative_to(output_dir)),
+            "bytes": int(target.stat().st_size),
+        }
+    return copied
+
+
 def safe_partition_value(value) -> str:
     """Return a stable path-safe value for simple Hive-style partitions."""
     text = "unknown" if pd.isna(value) else str(value)
@@ -523,6 +556,13 @@ def main() -> None:
     overview_paths["rank"] = overview_paths[model_id_column(overview_paths)].astype(str).map(rank_lookup)
     overview_paths.to_parquet(args.output_dir / "overview_prediction_paths.parquet", index=False)
 
+    eda_inputs = copy_eda_inputs(
+        args.output_dir,
+        args.integrated_base,
+        args.feature_table,
+        args.imputation_log,
+    )
+
     for filename in JSON_FILES:
         source = args.input_dir / filename
         if source.exists():
@@ -537,6 +577,7 @@ def main() -> None:
                     },
                     "path_partition_manifest": "path_partition_manifest.json",
                     "source_dir": str(args.input_dir),
+                    "eda_inputs": eda_inputs,
                     "curation_rule": (
                         "The flat path files keep configurations in the best keep_fraction "
                         "for core performance metrics, plus baseline and champion configurations. "
@@ -561,6 +602,7 @@ def main() -> None:
             "full_forecast_rows": int(len(frames["forecast_paths"])),
             "full_performance_rows": int(len(frames["performance_over_time"])),
             "path_partition_manifest": "path_partition_manifest.json",
+            "eda_inputs": eda_inputs,
         }
     )
     write_json(args.output_dir / "public_bundle_manifest.json", summary)
