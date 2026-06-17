@@ -16,14 +16,12 @@ def render_public_bundle_note(experiment_manifest: dict) -> None:
     keep_fraction = bundle.get("keep_fraction")
     keep_pct = f"{float(keep_fraction) * 100:.0f}%" if keep_fraction is not None else "configured"
     st.info(
-        "This live dashboard uses a performance-aware public artifact bundle with "
-        "three layers. The filterable model metadata index covers the full public "
-        f"experiment set ({source} source configurations). For fast initial loading, "
-        f"the app also keeps flat compatibility path files for {retained} configurations "
+        "This live dashboard uses a performance-aware public artifact bundle. "
+        f"The lightweight model index can cover up to {source} source configurations, "
+        f"while the flat compatibility path files retain {retained} configurations "
         f"from the best {keep_pct} of core metrics plus baseline/champion models. "
-        f"The full path-level forecast rows ({full_forecast_rows} forecasts) remain "
-        "available in partitioned Parquet files and are loaded on demand after "
-        "Model Explorer filters are applied."
+        f"When available, full path-level rows ({full_forecast_rows} forecasts) are "
+        "loaded on demand from partitioned Parquet files after filters are applied."
     )
 
 
@@ -43,15 +41,14 @@ def render_overview_page(
     full_config_count = bundle.get("source_configurations") or experiment_manifest.get("model_config_count") or len(leaderboard)
     full_prediction_count = experiment_manifest.get("prediction_count") or len(forecast_paths)
     displayed_prediction_count = len(forecast_paths)
-    flat_config_count = bundle.get("selected_configurations") or len(leaderboard)
 
     overview_cols = st.columns(6)
     overview_cols[0].metric(
         "Forecast Horizon",
         f"{manifest_value(experiment_manifest, 'horizon', champion.get('horizon', '-'))} months",
     )
-    overview_cols[1].metric("Filterable Configs", format_int(full_config_count))
-    overview_cols[2].metric("Flat Path Configs", format_int(flat_config_count))
+    overview_cols[1].metric("Full Model Configs", format_int(full_config_count))
+    overview_cols[2].metric("Indexed Configs", format_int(len(leaderboard)))
     overview_cols[3].metric("Full Rolling Predictions", format_int(full_prediction_count))
     overview_cols[4].metric("Flat Path Predictions", format_int(displayed_prediction_count))
     overview_cols[5].metric("Target Window", date_range_label(forecast_paths, "target_date"))

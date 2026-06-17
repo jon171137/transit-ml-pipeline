@@ -11,10 +11,6 @@ from constants import (
     DEFAULT_FEATURE_TABLE_PATH,
     DEFAULT_IMPUTATION_LOG_PATH,
     DEFAULT_INTEGRATED_BASE_PATH,
-    EDA_FEATURE_TABLE_FILENAME,
-    EDA_IMPUTATION_LOG_FILENAME,
-    EDA_INPUT_DIRNAME,
-    EDA_INTEGRATED_BASE_FILENAME,
     OPTIONAL_FILES,
     PATH_DATASET_DIRS,
     REQUIRED_FILES,
@@ -27,24 +23,15 @@ except ImportError:  # Polars is an optimization, not a hard local-dev requireme
 
 
 def configured_integrated_base_path() -> Path:
-    if "INTEGRATED_BASE_PATH" in os.environ:
-        return Path(os.environ["INTEGRATED_BASE_PATH"])
-    artifact_path = configured_artifact_dir() / EDA_INPUT_DIRNAME / EDA_INTEGRATED_BASE_FILENAME
-    return artifact_path if artifact_path.exists() else DEFAULT_INTEGRATED_BASE_PATH
+    return Path(os.environ.get("INTEGRATED_BASE_PATH", DEFAULT_INTEGRATED_BASE_PATH))
 
 
 def configured_feature_table_path() -> Path:
-    if "FEATURE_TABLE_PATH" in os.environ:
-        return Path(os.environ["FEATURE_TABLE_PATH"])
-    artifact_path = configured_artifact_dir() / EDA_INPUT_DIRNAME / EDA_FEATURE_TABLE_FILENAME
-    return artifact_path if artifact_path.exists() else DEFAULT_FEATURE_TABLE_PATH
+    return Path(os.environ.get("FEATURE_TABLE_PATH", DEFAULT_FEATURE_TABLE_PATH))
 
 
 def configured_imputation_log_path() -> Path:
-    if "IMPUTATION_LOG_PATH" in os.environ:
-        return Path(os.environ["IMPUTATION_LOG_PATH"])
-    artifact_path = configured_artifact_dir() / EDA_INPUT_DIRNAME / EDA_IMPUTATION_LOG_FILENAME
-    return artifact_path if artifact_path.exists() else DEFAULT_IMPUTATION_LOG_PATH
+    return Path(os.environ.get("IMPUTATION_LOG_PATH", DEFAULT_IMPUTATION_LOG_PATH))
 
 
 @st.cache_data(show_spinner=False)

@@ -437,9 +437,8 @@ promising GRU/LSTM sequence models, and additional target variants.
 
 The key requirement for the broader run is checkpointed, queryable experiment
 storage. DuckDB now sits between raw experiment artifacts and the dashboard,
-letting the project preserve detailed Parquet outputs while publishing a static
-Streamlit bundle with full model metadata, curated fast-loading compatibility
-files, and partitioned path-level rows for filtered drill-downs.
+letting the project preserve detailed Parquet outputs while publishing a curated
+static bundle for Streamlit.
 
 ### What To Look For
 

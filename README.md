@@ -23,7 +23,6 @@ Current dashboard shape:
 - Full model metadata index for the public experiment bundle.
 - Curated flat path files for fast initial loading and compatibility.
 - Partitioned full forecast/performance rows loaded on demand after model filters are applied.
-- Small EDA input artifacts for public Data-page source-series and correlation diagnostics.
 - Model Explorer controls for model build, mode, feature family, feature policy, feature transform, rank metric, per-build limit, total limit, path mode, and date window.
 - Insights page that distills selected experiment findings, including COVID shock behavior and XGBoost follow-up ablation ideas.
 
@@ -184,7 +183,6 @@ The full local experiment archive is larger than a lightweight public app needs.
 
 1. **Full lightweight metadata:** model leaderboard, complexity profile, and feature-family summary for the full indexed experiment set.
 2. **Path-level data:** curated flat files for compatibility plus partitioned full forecast/performance rows that can be loaded on demand after filters are applied.
-3. **EDA inputs:** small copies of the integrated monthly base, feature table, and imputation log used by the public Data page.
 
 Generate the public bundle with:
 

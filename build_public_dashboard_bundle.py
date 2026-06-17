@@ -19,10 +19,6 @@ import pandas as pd
 DEFAULT_INPUT_DIR = Path("dashboard_artifacts/aws_streamlined/latest")
 DEFAULT_OUTPUT_DIR = Path("dashboard/public_artifacts/latest")
 DEFAULT_FEATURE_FAMILIES = Path("feature_store/income_interactions_h3_v1/feature_families.json")
-DEFAULT_INTEGRATED_BASE = Path("raw_files/integrated_monthly_base.parquet")
-DEFAULT_FEATURE_TABLE = Path("feature_store/income_interactions_h3_v1/feature_table.parquet")
-DEFAULT_IMPUTATION_LOG = Path("feature_store/income_interactions_h3_v1/imputation_log.parquet")
-EDA_INPUT_DIRNAME = "eda_inputs"
 
 REQUIRED_PARQUET = {
     "champion_predictions": "champion_predictions.parquet",
@@ -129,9 +125,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--feature-families", type=Path, default=DEFAULT_FEATURE_FAMILIES)
-    parser.add_argument("--integrated-base", type=Path, default=DEFAULT_INTEGRATED_BASE)
-    parser.add_argument("--feature-table", type=Path, default=DEFAULT_FEATURE_TABLE)
-    parser.add_argument("--imputation-log", type=Path, default=DEFAULT_IMPUTATION_LOG)
     parser.add_argument(
         "--keep-fraction",
         type=float,
@@ -449,33 +442,6 @@ def write_partitioned_paths(
     }
 
 
-def copy_eda_inputs(
-    output_dir: Path,
-    integrated_base: Path,
-    feature_table: Path,
-    imputation_log: Path,
-) -> dict:
-    """Copy small source/feature artifacts used by public Data-page EDA."""
-    sources = {
-        "integrated_monthly_base": (integrated_base, "integrated_monthly_base.parquet"),
-        "feature_table": (feature_table, "feature_table.parquet"),
-        "imputation_log": (imputation_log, "imputation_log.parquet"),
-    }
-    eda_dir = output_dir / EDA_INPUT_DIRNAME
-    copied = {}
-    for label, (source_path, output_name) in sources.items():
-        if not source_path.exists():
-            continue
-        eda_dir.mkdir(parents=True, exist_ok=True)
-        destination = eda_dir / output_name
-        shutil.copy2(source_path, destination)
-        copied[label] = {
-            "path": str(destination.relative_to(output_dir)),
-            "bytes": int(destination.stat().st_size),
-        }
-    return copied
-
-
 def main() -> None:
     args = parse_args()
     if not 0 < args.keep_fraction <= 1:
@@ -530,13 +496,6 @@ def main() -> None:
             index=False,
         )
 
-    eda_inputs = copy_eda_inputs(
-        args.output_dir,
-        args.integrated_base,
-        args.feature_table,
-        args.imputation_log,
-    )
-
     partition_manifest = {
         "strategy": (
             "Flat path files are curated for backward compatibility. Full path-level "
@@ -577,7 +536,6 @@ def main() -> None:
                         "performance_over_time": int(len(frames["performance_over_time"])),
                     },
                     "path_partition_manifest": "path_partition_manifest.json",
-                    "eda_inputs": eda_inputs,
                     "source_dir": str(args.input_dir),
                     "curation_rule": (
                         "The flat path files keep configurations in the best keep_fraction "
@@ -603,7 +561,6 @@ def main() -> None:
             "full_forecast_rows": int(len(frames["forecast_paths"])),
             "full_performance_rows": int(len(frames["performance_over_time"])),
             "path_partition_manifest": "path_partition_manifest.json",
-            "eda_inputs": eda_inputs,
         }
     )
     write_json(args.output_dir / "public_bundle_manifest.json", summary)

@@ -1,18 +1,4 @@
 {
-  "eda_inputs": {
-    "feature_table": {
-      "bytes": 309008,
-      "path": "eda_inputs/feature_table.parquet"
-    },
-    "imputation_log": {
-      "bytes": 2224,
-      "path": "eda_inputs/imputation_log.parquet"
-    },
-    "integrated_monthly_base": {
-      "bytes": 44209,
-      "path": "eda_inputs/integrated_monthly_base.parquet"
-    }
-  },
   "forecast_rows": 462960,
   "full_forecast_rows": 1526400,
   "full_leaderboard_rows": 8480,

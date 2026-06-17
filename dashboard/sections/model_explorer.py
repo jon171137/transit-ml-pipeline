@@ -591,7 +591,4 @@ def render_model_explorer_page(
         st.plotly_chart(fig, use_container_width=True)
     st.markdown("**Loaded Artifacts**")
     st.code(str(run_dir), language="text")
-    st.write(
-        "This app reads static public dashboard artifacts: full model metadata plus "
-        "prebuilt forecast/performance rows. It does not trigger training jobs."
-    )
+    st.write("This app reads curated dashboard artifacts only. It does not trigger training jobs.")
