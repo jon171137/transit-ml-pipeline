@@ -334,6 +334,28 @@ def render_data_availability_report() -> None:
     )
 
 
+def render_alternative_data_sources_section() -> None:
+    st.markdown("### Alternative Data Sources")
+    st.write(
+        "This project intentionally starts with a compact monthly signal set. Future experiments "
+        "could test whether broader context improves the three-month-ahead forecast, especially "
+        "when those signals are available at the same historical as-of dates used by the model."
+    )
+    st.markdown(
+        """
+        - **Broader transit panels:** regional, state, national, or peer-agency ridership and service series could test whether wider recovery and operating-regime signals add information beyond the King County series.
+        - **Weather outlook context:** seasonal outlooks, heating/cooling degree days, precipitation, snow, heat, or wide-area anomaly measures could test whether expected weather pressure adds signal beyond the normal calendar-season pattern.
+        - **Public safety and activity signals:** monthly crime aggregates, downtown activity, office occupancy, or major-event counts for sports, concerts, and conventions could help capture demand shocks that are not purely seasonal.
+        - **Wider economic and mobility context:** employment, unemployment, tourism, airport volume, road congestion, and work-from-office indicators could help separate transit-specific movement from broader regional activity.
+        """
+    )
+    st.caption(
+        "The important constraint is leakage control: any added source should be known, published, "
+        "or reasonably forecastable at the as-of date. Otherwise it may look useful in hindsight "
+        "without improving a real rolling forecast."
+    )
+
+
 def pre_covid_mom_callouts(threshold: float = 2.0) -> pd.DataFrame:
     integrated_path = configured_integrated_base_path()
     if not integrated_path.exists():
@@ -1013,3 +1035,4 @@ def render_data_page(
         )
 
     render_data_availability_report()
+    render_alternative_data_sources_section()

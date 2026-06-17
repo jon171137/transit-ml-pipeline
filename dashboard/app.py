@@ -677,6 +677,17 @@ def load_family_summary(run_dir: Path):
     return summary.copy()
 
 
+def load_complexity_profile(run_dir: Path):
+    profile = load_optional_parquet(run_dir, "complexity_profile_full")
+    if profile is None:
+        profile = load_optional_parquet(run_dir, "complexity_profile")
+    if profile is None:
+        return None
+    profile = ensure_model_taxonomy(profile)
+    ensure_feature_policy_column(profile)
+    return profile
+
+
 def load_champion_predictions(run_dir: Path):
     predictions = normalize_dates(
         load_required_parquet(run_dir, "champion_predictions"),
@@ -814,11 +825,13 @@ def main() -> None:
         leaderboard = load_leaderboard(selected_dir)
         forecast_paths = load_forecast_paths(selected_dir)
         performance = load_performance_rows(selected_dir)
+        complexity_profile = load_complexity_profile(selected_dir)
         render_model_explorer_page(
             selected_dir,
             leaderboard,
             forecast_paths,
             performance,
+            complexity_profile,
             champion,
             experiment_manifest,
         )

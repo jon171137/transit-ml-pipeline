@@ -22,7 +22,7 @@ from content import (
     PERIOD_METRIC_SHORT_EXPLANATION,
     REPRESENTATION_AND_COMPLEXITY_EXPLANATION,
 )
-from formatting import date_range_label, format_int, manifest_value, months_label
+from formatting import date_range_label, format_float, format_int, manifest_value, months_label
 from model_helpers import (
     aggregate_metric_mapping,
     apply_date_window,
@@ -125,11 +125,204 @@ def optional_multiselect(
     )
 
 
+def format_duration(seconds) -> str:
+    if pd.isna(seconds):
+        return "-"
+    value = float(seconds)
+    if value < 0:
+        return "-"
+    if value < 0.01:
+        return f"{value * 1000:.2f} ms"
+    if value < 1:
+        return f"{value * 1000:.1f} ms"
+    if value < 60:
+        return f"{value:.2f} sec"
+    if value < 3600:
+        return f"{value / 60:.1f} min"
+    return f"{value / 3600:.1f} hr"
+
+
+def selected_complexity_profile(complexity_profile: Optional[pd.DataFrame], selected_models: pd.DataFrame) -> pd.DataFrame:
+    if complexity_profile is None or complexity_profile.empty or selected_models.empty:
+        return pd.DataFrame()
+    if "config_id" not in complexity_profile or "config_id" not in selected_models:
+        return pd.DataFrame()
+
+    config_ids = set(selected_models["config_id"].dropna().astype(str))
+    profile = complexity_profile.copy()
+    profile["config_id"] = profile["config_id"].astype(str)
+    return profile[profile["config_id"].isin(config_ids)].copy()
+
+
+def operational_footprint_summary(profile: pd.DataFrame) -> pd.DataFrame:
+    required = {"model_build_label", "config_id", "total_train_seconds", "avg_train_seconds"}
+    if profile.empty or not required.issubset(profile.columns):
+        return pd.DataFrame()
+
+    aggregations = {
+        "configurations": ("config_id", "nunique"),
+        "total_train_seconds": ("total_train_seconds", "sum"),
+        "median_config_train_seconds": ("total_train_seconds", "median"),
+        "median_refit_train_seconds": ("avg_train_seconds", "median"),
+    }
+    optional_aggs = {
+        "refit_count": ("refit_count", "median"),
+        "avg_n_train": ("avg_n_train", "median"),
+        "compute_score": ("compute_score", "median"),
+        "complexity_score": ("complexity_score", "median"),
+    }
+    for column, spec in optional_aggs.items():
+        if column in profile.columns:
+            aggregations[column] = spec
+
+    group_cols = ["model_family", "model_build", "model_build_label"]
+    summary = (
+        profile.groupby(group_cols, dropna=False, as_index=False)
+        .agg(**aggregations)
+        .sort_values("total_train_seconds", ascending=False)
+    )
+    return summary
+
+
+def render_operational_footprint(complexity_profile: Optional[pd.DataFrame], selected_models: pd.DataFrame) -> None:
+    st.subheader("Operational Footprint")
+    active_profile = selected_complexity_profile(complexity_profile, selected_models)
+    summary = operational_footprint_summary(active_profile)
+    if summary.empty:
+        st.info(
+            "No measured training-footprint artifact is available for the active model selection. "
+            "The dashboard can compare accuracy, but it cannot yet report training or inference cost "
+            "for this slice."
+        )
+        return
+
+    total_configs = int(active_profile["config_id"].nunique())
+    total_train_seconds = pd.to_numeric(active_profile["total_train_seconds"], errors="coerce").sum()
+    median_config_seconds = pd.to_numeric(active_profile["total_train_seconds"], errors="coerce").median()
+    median_refit_seconds = pd.to_numeric(active_profile["avg_train_seconds"], errors="coerce").median()
+    most_expensive = summary.iloc[0]["model_build_label"]
+
+    st.caption(
+        "Training footprint is calculated from `complexity_profile_full.parquet` for the active "
+        "Top Models selection above. These are recorded experiment-run fit times across rolling "
+        "historical refits, not live infrastructure costs. Inference latency and memory use are not "
+        "currently logged in the artifact bundle."
+    )
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Selected configs", format_int(total_configs))
+    metric_cols[1].metric("Total recorded train time", format_duration(total_train_seconds))
+    metric_cols[2].metric("Median train time / config", format_duration(median_config_seconds))
+    metric_cols[3].metric("Median fit time / refit", format_duration(median_refit_seconds))
+    st.caption(f"Largest selected training share: {most_expensive}.")
+
+    fig = px.bar(
+        summary,
+        x="model_build_label",
+        y="total_train_seconds",
+        color="model_family",
+        category_orders={
+            "model_family": MODEL_FAMILY_ORDER,
+            "model_build_label": ordered_model_build_labels(summary),
+        },
+        labels={
+            "model_build_label": "Model build",
+            "model_family": "Model family",
+            "total_train_seconds": "Total recorded training seconds",
+        },
+        hover_data={
+            "configurations": ":,.0f",
+            "total_train_seconds": ":,.2f",
+            "median_config_train_seconds": ":,.2f",
+            "median_refit_train_seconds": ":,.4f",
+        },
+    )
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=30, b=10),
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font=dict(color="#2f323a"),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    display = summary.copy()
+    display["Total train time"] = display["total_train_seconds"].map(format_duration)
+    display["Median train time / config"] = display["median_config_train_seconds"].map(format_duration)
+    display["Median fit time / refit"] = display["median_refit_train_seconds"].map(format_duration)
+    if "refit_count" in display:
+        display["Median refits / config"] = display["refit_count"].map(format_int)
+    if "avg_n_train" in display:
+        display["Median training rows / refit"] = display["avg_n_train"].map(format_int)
+    if "compute_score" in display:
+        display["Median compute score"] = display["compute_score"].map(lambda value: format_float(value, 1))
+    if "complexity_score" in display:
+        display["Median complexity score"] = display["complexity_score"].map(lambda value: format_float(value, 1))
+
+    display_cols = [
+        "model_build_label",
+        "configurations",
+        "Total train time",
+        "Median train time / config",
+        "Median fit time / refit",
+        "Median refits / config",
+        "Median training rows / refit",
+        "Median compute score",
+        "Median complexity score",
+    ]
+    display_cols = [column for column in display_cols if column in display.columns]
+    display = display[display_cols].rename(
+        columns={
+            "model_build_label": "Model build",
+            "configurations": "Configurations",
+        }
+    )
+    st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True,
+        height=min(460, 38 * (len(display) + 1)),
+    )
+    st.markdown(
+        """
+        **How the complexity score is calculated.** The score is a normalized
+        within-experiment comparison, not an absolute engineering cost. Each
+        model configuration gets three normalized inputs: selected feature
+        count, a model-size proxy, and recorded training time. The final score
+        is scaled from 0 to 100:
+
+        `complexity_score = 100 * (0.40 * feature_count + 0.35 * model_size + 0.25 * training_time)`
+
+        The model-size proxy is tailored by model type. Baseline models are set
+        near 1. Linear models use selected feature count. Random Forest and Extra
+        Trees use roughly `n_estimators * max_depth`. XGBoost uses
+        `n_estimators * max_depth * colsample_bytree`. ARIMA/SARIMA/SARIMAX use
+        order terms plus feature count. Neural models approximate parameter
+        count from sequence length, feature count, hidden sizes, recurrent gate
+        count, and dense head layers.
+
+        `compute_score` is narrower: it is based only on log-normalized total
+        training seconds. A higher complexity score therefore means the selected
+        configuration is heavier relative to this experiment's model set, but it
+        does not directly report memory use, infrastructure cost, or inference
+        latency.
+        """
+    )
+
+    context_cols = [col for col in ["framework", "hardware_type", "device", "gpu_name", "cuda_version"] if col in active_profile]
+    if context_cols:
+        context = active_profile[context_cols].replace("", pd.NA).drop_duplicates().dropna(how="all")
+        if not context.empty:
+            with st.expander("Recorded runtime context"):
+                st.dataframe(context.head(12), width="stretch", hide_index=True)
+
+
 def render_model_explorer_page(
     run_dir: Path,
     leaderboard: pd.DataFrame,
     forecast_paths: pd.DataFrame,
     performance: pd.DataFrame,
+    complexity_profile: Optional[pd.DataFrame],
     champion: dict,
     experiment_manifest: dict,
 ) -> None:
@@ -561,34 +754,7 @@ def render_model_explorer_page(
         ]
         available_mapping_cols = [column for column in table_cols if column in mapping_frame.columns]
         render_metric_dataframe(mapping_frame[available_mapping_cols], max_rows=200)
-    st.subheader("Operational Footprint")
-    if {"model_type", "total_train_seconds", "avg_train_seconds"}.issubset(leaderboard.columns):
-        runtime = (
-            leaderboard.groupby("model_type", as_index=False)
-            .agg(
-                total_train_seconds=("total_train_seconds", "sum"),
-                avg_train_seconds=("avg_train_seconds", "mean"),
-                configs=("config_id", "nunique"),
-            )
-            .sort_values("total_train_seconds", ascending=False)
-        )
-        st.dataframe(runtime, width="stretch", hide_index=True)
-        fig = px.bar(
-            runtime,
-            x="model_type",
-            y="total_train_seconds",
-            color="model_type",
-            labels={"model_type": "Model type", "total_train_seconds": "Total train seconds"},
-        )
-        fig.update_layout(
-            showlegend=False,
-            margin=dict(l=10, r=10, t=30, b=10),
-            template="plotly_white",
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
-            font=dict(color="#2f323a"),
-        )
-        st.plotly_chart(fig, width="stretch")
+    render_operational_footprint(complexity_profile, filtered_top)
     st.markdown("**Loaded Artifacts**")
     st.code(str(run_dir), language="text")
     st.write("This app reads curated dashboard artifacts only. It does not trigger training jobs.")
