@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 
@@ -8,6 +9,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 from constants import (
+    OPTIONAL_FILES,
     PHASE_A_V3_CONFIG_PATH,
     PHASE_B_V3_CONFIG_PATH,
     PHASE_C_MONTHLY_CONFIG_PATH,
@@ -16,9 +18,11 @@ from constants import (
 from data_access import (
     configured_artifact_dir,
     discover_run_dirs,
-    load_artifacts,
     load_config_text,
     load_feature_family_definitions,
+    load_json,
+    load_parquet,
+    file_modified_ns,
 )
 from model_helpers import (
     enrich_score_columns,
@@ -584,6 +588,138 @@ def render_missing_artifacts(base_dir: Path) -> None:
     st.code("\n".join(REQUIRED_FILES.values()), language="text")
 
 
+def _required_artifact_path(run_dir: Path, key: str) -> Path:
+    return run_dir / REQUIRED_FILES[key]
+
+
+def _optional_artifact_path(run_dir: Path, key: str) -> Path:
+    return run_dir / OPTIONAL_FILES[key]
+
+
+def load_required_parquet(run_dir: Path, key: str):
+    path = _required_artifact_path(run_dir, key)
+    return load_parquet(str(path), file_modified_ns(path))
+
+
+def load_optional_parquet(run_dir: Path, key: str):
+    path = _optional_artifact_path(run_dir, key)
+    if not path.exists():
+        return None
+    return load_parquet(str(path), file_modified_ns(path))
+
+
+def load_required_json(run_dir: Path, key: str) -> dict:
+    path = _required_artifact_path(run_dir, key)
+    return load_json(str(path), file_modified_ns(path))
+
+
+def load_optional_json(run_dir: Path, key: str) -> dict:
+    path = _optional_artifact_path(run_dir, key)
+    if not path.exists():
+        return {}
+    return load_json(str(path), file_modified_ns(path))
+
+
+def load_public_bundle_manifest(run_dir: Path) -> dict:
+    path = run_dir / "public_bundle_manifest.json"
+    if not path.exists():
+        return {}
+    return load_json(str(path), file_modified_ns(path))
+
+
+def merge_public_bundle_counts(experiment_manifest: dict, public_manifest: dict) -> dict:
+    if not public_manifest:
+        return experiment_manifest
+
+    merged = dict(experiment_manifest)
+    bundle = dict(merged.get("public_dashboard_bundle", {}))
+    bundle.setdefault("source_configurations", public_manifest.get("source_configurations"))
+    bundle.setdefault("full_metadata_configurations", public_manifest.get("full_leaderboard_rows"))
+    bundle.setdefault("selected_configurations", public_manifest.get("selected_configurations"))
+    bundle.setdefault("keep_fraction", public_manifest.get("keep_fraction"))
+    bundle.setdefault(
+        "full_path_rows",
+        {
+            "forecast_paths": public_manifest.get("full_forecast_rows"),
+            "performance_over_time": public_manifest.get("full_performance_rows"),
+        },
+    )
+    bundle.setdefault(
+        "flat_path_rows",
+        {
+            "forecast_paths": public_manifest.get("forecast_rows"),
+            "performance_over_time": public_manifest.get("performance_rows"),
+        },
+    )
+    merged["public_dashboard_bundle"] = bundle
+    return merged
+
+
+def ensure_feature_policy_column(*frames) -> None:
+    for frame in frames:
+        if frame is not None and "feature_policy" not in frame:
+            frame["feature_policy"] = "none"
+
+
+def load_leaderboard(run_dir: Path, *, full: bool = True):
+    source = load_optional_parquet(run_dir, "model_leaderboard_full") if full else None
+    if source is None:
+        source = load_required_parquet(run_dir, "model_leaderboard")
+    leaderboard = enrich_score_columns(ensure_model_taxonomy(source))
+    ensure_feature_policy_column(leaderboard)
+    return leaderboard
+
+
+def load_family_summary(run_dir: Path):
+    summary = load_optional_parquet(run_dir, "feature_family_summary_full")
+    if summary is None:
+        summary = load_required_parquet(run_dir, "feature_family_summary")
+    return summary.copy()
+
+
+def load_champion_predictions(run_dir: Path):
+    predictions = normalize_dates(
+        load_required_parquet(run_dir, "champion_predictions"),
+        ["as_of_date", "target_date"],
+    )
+    predictions = ensure_model_taxonomy(predictions)
+    ensure_feature_policy_column(predictions)
+    return predictions
+
+
+def load_overview_predictions(run_dir: Path):
+    predictions = load_optional_parquet(run_dir, "overview_prediction_paths")
+    if predictions is None:
+        predictions = load_required_parquet(run_dir, "champion_predictions")
+    predictions = ensure_model_taxonomy(normalize_dates(predictions, ["as_of_date", "target_date"]))
+    ensure_feature_policy_column(predictions)
+    return predictions
+
+
+def load_forecast_paths(run_dir: Path):
+    paths = ensure_model_taxonomy(
+        normalize_dates(load_required_parquet(run_dir, "forecast_paths"), ["as_of_date", "target_date"])
+    )
+    ensure_feature_policy_column(paths)
+    return paths
+
+
+def load_performance_rows(run_dir: Path):
+    performance = ensure_model_taxonomy(
+        normalize_dates(load_required_parquet(run_dir, "performance_over_time"), ["as_of_date", "target_date"])
+    )
+    ensure_feature_policy_column(performance)
+    return performance
+
+
+def flat_forecast_row_count(experiment_manifest: dict, fallback: Optional[int] = None) -> Optional[int]:
+    bundle = experiment_manifest.get("public_dashboard_bundle", {})
+    flat_path_rows = bundle.get("flat_path_rows", {})
+    if isinstance(flat_path_rows, dict) and flat_path_rows.get("forecast_paths") is not None:
+        return flat_path_rows.get("forecast_paths")
+    return fallback
+
+
 def main() -> None:
     inject_site_theme()
     artifact_base = configured_artifact_dir()
@@ -599,45 +735,11 @@ def main() -> None:
         format_func=lambda path: path.name if path.name != "latest" else str(path),
     )
 
-    artifacts = load_artifacts(selected_dir)
-    forecast_paths = ensure_model_taxonomy(
-        normalize_dates(artifacts["forecast_paths"], ["as_of_date", "target_date"])
+    champion = load_required_json(selected_dir, "champion_selection")
+    experiment_manifest = merge_public_bundle_counts(
+        load_optional_json(selected_dir, "experiment_manifest"),
+        load_public_bundle_manifest(selected_dir),
     )
-    performance = ensure_model_taxonomy(
-        normalize_dates(artifacts["performance_over_time"], ["as_of_date", "target_date"])
-    )
-    curated_leaderboard = enrich_score_columns(ensure_model_taxonomy(artifacts["model_leaderboard"]))
-    leaderboard_source = artifacts.get("model_leaderboard_full", artifacts["model_leaderboard"])
-    leaderboard = enrich_score_columns(ensure_model_taxonomy(leaderboard_source))
-    family_summary = artifacts.get("feature_family_summary_full", artifacts["feature_family_summary"]).copy()
-    champion_predictions = normalize_dates(artifacts["champion_predictions"], ["as_of_date", "target_date"])
-    champion = artifacts["champion_selection"]
-    experiment_manifest = artifacts.get("experiment_manifest", {})
-    feature_families = load_feature_family_definitions()
-    phase_a_config_text = load_config_text(PHASE_A_V3_CONFIG_PATH)
-    phase_b_config_text = load_config_text(PHASE_B_V3_CONFIG_PATH)
-    phase_c_config_text = load_config_text(PHASE_C_MONTHLY_CONFIG_PATH)
-    overview_top_models = enrich_score_columns(
-        ensure_model_taxonomy(artifacts.get("overview_top_models", leaderboard.head(5).copy()))
-    )
-    overview_prediction_paths = artifacts.get("overview_prediction_paths")
-    if overview_prediction_paths is None:
-        top_configs = overview_top_models["config_id"].head(5).tolist()
-        overview_prediction_paths = forecast_paths[forecast_paths["config_id"].isin(top_configs)].copy()
-        rank_lookup = dict(zip(top_configs, range(1, len(top_configs) + 1)))
-        overview_prediction_paths["rank"] = overview_prediction_paths["config_id"].map(rank_lookup)
-    overview_prediction_paths = ensure_model_taxonomy(
-        normalize_dates(overview_prediction_paths, ["as_of_date", "target_date"])
-    )
-    for frame in [
-        forecast_paths,
-        performance,
-        leaderboard,
-        overview_top_models,
-        overview_prediction_paths,
-    ]:
-        if "feature_policy" not in frame:
-            frame["feature_policy"] = "none"
     render_project_banner()
 
     section_options = [
@@ -662,21 +764,37 @@ def main() -> None:
     if active_section == "Project Overview":
         from sections.overview import render_overview_page
 
-        render_overview_page(experiment_manifest, leaderboard, forecast_paths, champion)
+        overview_prediction_paths = load_overview_predictions(selected_dir)
+        render_overview_page(
+            experiment_manifest,
+            overview_prediction_paths,
+            champion,
+            flat_forecast_row_count(experiment_manifest, len(overview_prediction_paths)),
+            experiment_manifest.get("public_dashboard_bundle", {}).get("source_configurations"),
+        )
 
     elif active_section == "Data":
         from sections.data import render_data_page
 
-        render_data_page(family_summary, leaderboard, forecast_paths, champion, feature_families)
+        champion_predictions = load_champion_predictions(selected_dir)
+        render_data_page(champion_predictions, champion)
 
     elif active_section == "System":
         from sections.system import render_system_page
 
-        render_system_page(experiment_manifest, len(forecast_paths))
+        render_system_page(experiment_manifest, flat_forecast_row_count(experiment_manifest))
 
     elif active_section == "Experiment":
         from sections.experiment import render_experiment_page
 
+        family_summary = load_family_summary(selected_dir)
+        feature_families = load_feature_family_definitions()
+        leaderboard = load_leaderboard(selected_dir)
+        forecast_paths = load_forecast_paths(selected_dir)
+        performance = load_performance_rows(selected_dir)
+        phase_a_config_text = load_config_text(PHASE_A_V3_CONFIG_PATH)
+        phase_b_config_text = load_config_text(PHASE_B_V3_CONFIG_PATH)
+        phase_c_config_text = load_config_text(PHASE_C_MONTHLY_CONFIG_PATH)
         render_experiment_page(
             family_summary,
             feature_families,
@@ -693,6 +811,9 @@ def main() -> None:
     elif active_section == "Model Explorer":
         from sections.model_explorer import render_model_explorer_page
 
+        leaderboard = load_leaderboard(selected_dir)
+        forecast_paths = load_forecast_paths(selected_dir)
+        performance = load_performance_rows(selected_dir)
         render_model_explorer_page(
             selected_dir,
             leaderboard,
@@ -705,6 +826,9 @@ def main() -> None:
     elif active_section == "Insights":
         from sections.insights import render_insights_page
 
+        leaderboard = load_leaderboard(selected_dir)
+        forecast_paths = load_forecast_paths(selected_dir)
+        performance = load_performance_rows(selected_dir)
         render_insights_page(
             selected_dir,
             leaderboard,

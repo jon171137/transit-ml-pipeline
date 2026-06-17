@@ -271,7 +271,7 @@ def render_model_explorer_page(
         )
     st.plotly_chart(
         top_model_chart(chart_paths, "Selected Model Paths"),
-        use_container_width=True,
+        width="stretch",
     )
     render_metric_dataframe(overview_table(selected_models.head(50)))
     with st.expander("Champion selection rule"):
@@ -313,7 +313,7 @@ def render_model_explorer_page(
         rolling_subset = rolling_subset[
             rolling_subset["config_id"].isin(filtered_top.head(12)["config_id"])
         ].copy()
-    st.plotly_chart(rolling_error_chart(rolling_subset), use_container_width=True)
+    st.plotly_chart(rolling_error_chart(rolling_subset), width="stretch")
     st.subheader("Model Build Comparison")
     comparison_metric = RANK_METRIC_OPTIONS[metric_label][0]
     comparison_ascending = RANK_METRIC_OPTIONS[metric_label][1]
@@ -352,7 +352,7 @@ def render_model_explorer_page(
         )
         if comparison_metric in {"r2", "r2_adjusted"}:
             fig.update_yaxes(range=[0, 1])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     st.markdown("### Selected Model Forecast Rows")
     detail_candidates = filtered_top.copy().reset_index(drop=True)
     if detail_candidates.empty:
@@ -408,7 +408,7 @@ def render_model_explorer_page(
         detail_columns = [column for column in detail_columns if column in detail_forecast.columns]
         st.dataframe(
             detail_forecast[detail_columns],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     st.subheader("Metric Mapping")
@@ -526,7 +526,7 @@ def render_model_explorer_page(
                 color_by,
                 aggregate_points,
             ),
-            use_container_width=True,
+            width="stretch",
         )
         table_cols = [
             "model_build_label",
@@ -572,7 +572,7 @@ def render_model_explorer_page(
             )
             .sort_values("total_train_seconds", ascending=False)
         )
-        st.dataframe(runtime, use_container_width=True, hide_index=True)
+        st.dataframe(runtime, width="stretch", hide_index=True)
         fig = px.bar(
             runtime,
             x="model_type",
@@ -588,7 +588,7 @@ def render_model_explorer_page(
             plot_bgcolor="#ffffff",
             font=dict(color="#2f323a"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     st.markdown("**Loaded Artifacts**")
     st.code(str(run_dir), language="text")
     st.write("This app reads curated dashboard artifacts only. It does not trigger training jobs.")

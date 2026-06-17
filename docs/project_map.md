@@ -168,7 +168,7 @@ The public bundle has two layers:
 | Layer | Files | Role |
 |---|---|---|
 | Full lightweight metadata | `model_leaderboard_full.parquet`, `complexity_profile_full.parquet`, `feature_family_summary_full.parquet` | Lets the dashboard filter and compare the full public experiment index. |
-| Curated flat compatibility files | `forecast_paths.parquet`, `performance_over_time.parquet`, `model_leaderboard.parquet` | Fast initial loading and backward-compatible dashboard views. |
+| Curated flat compatibility files | `forecast_paths.parquet`, `performance_over_time.parquet`, `model_leaderboard.parquet` | Fallback path-level views and backward-compatible dashboard loading without scanning every full partition. |
 | Partitioned full path rows | `forecast_paths_by_build/`, `performance_over_time_by_build/` | On-demand path/performance loading after filters are applied. |
 | Manifests | `experiment_manifest.json`, `public_bundle_manifest.json`, `path_partition_manifest.json` | Documents curation rules, source counts, and partition layout. |
 

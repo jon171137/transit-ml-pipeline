@@ -85,7 +85,7 @@ def render_insights_page(
         "which strategies are accurate overall, which survive hard periods, and where "
         "similar aggregate scores hide different forecast paths."
     )
-    st.dataframe(pd.DataFrame(inquiry_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(inquiry_rows), width="stretch", hide_index=True)
 
     candidate_models = exclude_baseline_candidates(leaderboard)
     score_col = "selection_score_balanced" if "selection_score_balanced" in candidate_models else "selection_score"
@@ -119,7 +119,7 @@ def render_insights_page(
         else:
             st.plotly_chart(
                 top_model_chart(shock_chart_paths, "Best Model-Build Paths During COVID Shock"),
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(
                 "Selection: top one non-baseline configuration per model build by balanced score, "
@@ -164,7 +164,7 @@ def render_insights_page(
         else:
             st.plotly_chart(
                 top_model_chart(top10_chart_paths, "Top 10 Overall Paths During COVID Shock"),
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(
                 "Selection: top 10 non-baseline configurations by balanced score, regardless of model build. "
@@ -219,7 +219,7 @@ def render_insights_page(
                 "Follow-up test": "Add residual diagnostics, conformal intervals, and period-specific calibration checks.",
             },
         ]
-        st.dataframe(pd.DataFrame(xgb_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(xgb_rows), width="stretch", hide_index=True)
         st.info(
             "A useful next experiment is a matched tree-family ablation. More random-forest "
             "variants could test whether the gap is just tree capacity, but random forests do "
@@ -270,7 +270,7 @@ def render_insights_page(
             plot_bgcolor="#ffffff",
             font={"color": "#2f323a"},
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         render_metric_dataframe(
             build_summary[
                 [
@@ -352,4 +352,4 @@ def render_insights_page(
             "separate ordinary forecasting difficulty from pandemic shock and "
             "recovery dynamics."
         )
-        st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(period_rows), width="stretch", hide_index=True)

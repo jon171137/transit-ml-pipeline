@@ -180,7 +180,7 @@ def render_metric_dataframe(
     st.dataframe(
         styled_metric_table(display),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         **dataframe_kwargs,
     )
 

@@ -16,12 +16,6 @@ from constants import (
     REQUIRED_FILES,
 )
 
-try:
-    import polars as pl
-except ImportError:  # Polars is an optimization, not a hard local-dev requirement.
-    pl = None
-
-
 def configured_integrated_base_path() -> Path:
     return Path(os.environ.get("INTEGRATED_BASE_PATH", DEFAULT_INTEGRATED_BASE_PATH))
 
@@ -117,6 +111,14 @@ def path_partition_files(dataset_dir: Path, model_builds: tuple[str, ...]) -> li
     return sorted(dataset_dir.glob("**/*.parquet"))
 
 
+def optional_polars():
+    try:
+        import polars as pl
+    except ImportError:  # Polars is an optimization, not a hard local-dev requirement.
+        return None
+    return pl
+
+
 @st.cache_data(show_spinner=False)
 def load_path_rows_for_configs(
     run_dir: str,
@@ -133,6 +135,7 @@ def load_path_rows_for_configs(
     dataset_dir = run_path / PATH_DATASET_DIRS[dataset_name]
     files = path_partition_files(dataset_dir, model_builds)
     config_values = [str(config_id) for config_id in config_ids]
+    pl = optional_polars()
 
     if files and pl is not None:
         lazy_frames = [pl.scan_parquet(str(path)) for path in files]

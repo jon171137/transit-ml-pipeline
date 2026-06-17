@@ -1,6 +1,7 @@
 import base64
 from html import escape
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 
@@ -42,13 +43,13 @@ def render_system_screenshot(path: Path, title: str, description: str) -> None:
         st.write(description)
     with image_col:
         if path.exists():
-            st.image(str(path), use_container_width=True)
+            st.image(str(path), width="stretch")
         else:
             st.info(f"Expected screenshot asset not found: `{path}`")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_system_artifact_flow(experiment_manifest: dict, flat_forecast_rows: int) -> None:
+def render_system_artifact_flow(experiment_manifest: dict, flat_forecast_rows: Optional[int]) -> None:
     st.markdown(SYSTEM_ARTIFACT_FLOW)
 
     bundle = experiment_manifest.get("public_dashboard_bundle", {})
@@ -71,7 +72,7 @@ def render_system_artifact_flow(experiment_manifest: dict, flat_forecast_rows: i
         {
             "Layer": "Curated compatibility paths",
             "Path / files": ["forecast_paths.parquet", "performance_over_time.parquet"],
-            "Dashboard role": "Fast initial overview/champion context and backward-compatible dashboard loading.",
+            "Dashboard role": "Fallback path-level views and backward-compatible loading without requiring the full partition scan.",
         },
         {
             "Layer": "Partitioned full paths",
@@ -119,7 +120,7 @@ def render_system_artifact_flow(experiment_manifest: dict, flat_forecast_rows: i
     )
 
 
-def render_system_page(experiment_manifest: dict, flat_forecast_rows: int) -> None:
+def render_system_page(experiment_manifest: dict, flat_forecast_rows: Optional[int]) -> None:
     system_cols = st.columns(2)
     system_cols[0].markdown(SYSTEM_ARCHITECTURE)
     system_cols[1].markdown(SYSTEM_REASONING)

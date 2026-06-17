@@ -307,11 +307,11 @@ def render_data_availability_report() -> None:
 
     if not readiness.empty:
         st.markdown("**Pipeline readiness checks**")
-        st.dataframe(readiness, use_container_width=True, hide_index=True)
+        st.dataframe(readiness, width="stretch", hide_index=True)
 
     if not availability.empty:
         st.markdown("**Source series availability**")
-        st.dataframe(availability, use_container_width=True, hide_index=True)
+        st.dataframe(availability, width="stretch", hide_index=True)
 
     st.markdown("**Imputation activity**")
     if imputation_summary.empty:
@@ -326,7 +326,7 @@ def render_data_availability_report() -> None:
             f"{active_total:,} active imputation-flag rows. The imputation log contains "
             f"{metadata.get('imputation_log_rows', 0):,} row(s)."
         )
-        st.dataframe(imputation_summary, use_container_width=True, hide_index=True)
+        st.dataframe(imputation_summary, width="stretch", hide_index=True)
     st.caption(
         "Imputation is designed for inside-window interpolation and trailing trend fills on selected "
         "monthly exogenous series. In the current modeling artifact, the selected date window and "
@@ -736,11 +736,8 @@ def dashboard_correlation_matrices() -> dict[str, pd.DataFrame]:
 
 
 def render_data_page(
-    family_summary: pd.DataFrame,
-    leaderboard: pd.DataFrame,
-    forecast_paths: pd.DataFrame,
+    forecast_examples: pd.DataFrame,
     champion: dict,
-    feature_families: dict,
 ) -> None:
     data_intro_cols = st.columns(2)
     data_intro_cols[0].markdown(summary_panel_from_markdown(DATA_PRIMARY_DATA), unsafe_allow_html=True)
@@ -764,7 +761,7 @@ def render_data_page(
         source_tabs = st.tabs([option["label"] for option in source_options])
         for tab_panel, option in zip(source_tabs, source_options):
             with tab_panel:
-                st.plotly_chart(source_series_figure(source_series, option), use_container_width=True)
+                st.plotly_chart(source_series_figure(source_series, option), width="stretch")
                 start_date = source_series.loc[source_series[option["column"]].notna(), "date"].min()
                 end_date = source_series.loc[source_series[option["column"]].notna(), "date"].max()
                 if pd.notna(start_date) and pd.notna(end_date):
@@ -803,7 +800,7 @@ def render_data_page(
             """,
             unsafe_allow_html=True,
         )
-        st.plotly_chart(lagged_correlation_figure(lagged_corr), use_container_width=True)
+        st.plotly_chart(lagged_correlation_figure(lagged_corr), width="stretch")
 
     corr_matrices = dashboard_correlation_matrices()
     if corr_matrices:
@@ -827,7 +824,7 @@ def render_data_page(
         matrix_tabs = st.tabs(list(corr_matrices.keys()))
         for tab_panel, (title, matrix) in zip(matrix_tabs, corr_matrices.items()):
             with tab_panel:
-                st.plotly_chart(correlation_heatmap_figure(matrix, title), use_container_width=True)
+                st.plotly_chart(correlation_heatmap_figure(matrix, title), width="stretch")
 
     granger_screening = granger_predictive_screening()
     if not granger_screening.empty:
@@ -852,7 +849,7 @@ def render_data_page(
             """,
             unsafe_allow_html=True,
         )
-        st.plotly_chart(granger_predictive_figure(granger_screening), use_container_width=True)
+        st.plotly_chart(granger_predictive_figure(granger_screening), width="stretch")
 
     break_summary = covid_break_diagnostics()
     if not break_summary.empty:
@@ -889,9 +886,10 @@ def render_data_page(
 
     st.markdown("### Single Forecast Step Example")
     config_id = champion.get("model_config_id") or champion.get("config_id")
-    sample = forecast_paths[forecast_paths["model_config_id"] == config_id].copy()
+    id_col = "model_config_id" if "model_config_id" in forecast_examples.columns else "config_id"
+    sample = forecast_examples[forecast_examples[id_col] == config_id].copy()
     if sample.empty:
-        sample = forecast_paths.copy()
+        sample = forecast_examples.copy()
     if not sample.empty:
         sample = sample.sort_values("target_date").iloc[len(sample) // 2]
         target_date = pd.Timestamp(sample["target_date"])
@@ -914,7 +912,7 @@ def render_data_page(
         ]
         st.dataframe(
             pd.DataFrame(example_rows, columns=["Field", "Example value", "Interpretation"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 

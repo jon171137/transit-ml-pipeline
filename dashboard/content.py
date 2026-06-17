@@ -53,8 +53,9 @@ SYSTEM_ARCHITECTURE = """
   metadata contract.
 - DuckDB builds a queryable analytical mart, then exports dashboard-ready files.
 - The public Streamlit bundle keeps full lightweight model metadata, curated
-  compatibility path files, and partitioned full path-level rows that can be
-  loaded on demand.
+  compatibility path files, and partitioned full path-level rows. The app
+  loads small metadata first, then reads larger path rows only for views that
+  need them.
 """
 
 

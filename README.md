@@ -184,6 +184,8 @@ The full local experiment archive is larger than a lightweight public app needs.
 1. **Full lightweight metadata:** model leaderboard, complexity profile, and feature-family summary for the full indexed experiment set.
 2. **Path-level data:** curated flat files for compatibility plus partitioned full forecast/performance rows that can be loaded on demand after filters are applied.
 
+The Streamlit app is intentionally lazy-loaded: overview and documentation pages read only manifests and small summary artifacts, while heavier forecast/performance rows are loaded only inside result-exploration views that need path-level data.
+
 Generate the public bundle with:
 
 ```bash

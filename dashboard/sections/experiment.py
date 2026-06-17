@@ -127,10 +127,10 @@ def render_feature_family_sections(family_summary: pd.DataFrame, feature_familie
         if curated_rows:
             family_display = pd.concat(curated_rows, ignore_index=True)
         family_display = family_display[family_columns]
-        st.dataframe(family_display, use_container_width=True, hide_index=True)
+        st.dataframe(family_display, width="stretch", hide_index=True)
     else:
         family_cols = [col for col in ["feature_family_name", "mode"] if col in family_summary]
-        st.dataframe(family_summary[family_cols].drop_duplicates(), use_container_width=True, hide_index=True)
+        st.dataframe(family_summary[family_cols].drop_duplicates(), width="stretch", hide_index=True)
 
     st.markdown("### Feature Count By Family")
     st.write(
@@ -143,7 +143,7 @@ def render_feature_family_sections(family_summary: pd.DataFrame, feature_familie
     if count_frame.empty:
         st.info("Feature family definitions were not found, so the count chart cannot be rendered.")
     else:
-        st.plotly_chart(feature_family_count_figure(count_frame), use_container_width=True)
+        st.plotly_chart(feature_family_count_figure(count_frame), width="stretch")
 
     st.markdown("### Feature Family Definitions")
     st.write(
@@ -210,7 +210,7 @@ def render_feature_family_sections(family_summary: pd.DataFrame, feature_familie
             "Purpose": "Let linear models express selected non-additive relationships without a full polynomial explosion.",
         },
     ]
-    st.dataframe(pd.DataFrame(feature_type_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(feature_type_rows), width="stretch", hide_index=True)
 
 
 def render_experiment_page(
@@ -374,7 +374,7 @@ def render_experiment_page(
                 "Interpretation": "Stress-test representation that gives regularization several nonlinear shapes to choose from.",
             },
         ]
-        st.dataframe(pd.DataFrame(transform_detail_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(transform_detail_rows), width="stretch", hide_index=True)
         st.info(
             "The cubic transform is hierarchical in this run: a selected feature gets "
             "the original value, the quadratic term, and the cubic term. It is not a "
@@ -414,7 +414,7 @@ def render_experiment_page(
                 "Why it helps": "Shows whether domain-guided transforms improve forecasts beyond relying on regularization to clean up a large expansion.",
             },
         ]
-        st.dataframe(pd.DataFrame(strategy_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(strategy_rows), width="stretch", hide_index=True)
     with st.expander("How feature, representation, and complexity policies are interpreted"):
         st.markdown(REPRESENTATION_AND_COMPLEXITY_EXPLANATION)
 
@@ -446,7 +446,7 @@ def render_experiment_page(
             "Loaded": "yes" if phase_c_config_text else "missing",
         },
     ]
-    st.dataframe(pd.DataFrame(config_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(config_rows), width="stretch", hide_index=True)
 
     if phase_a_config_text:
         with st.expander("Show Phase A v3 pandemic-safe config YAML"):
