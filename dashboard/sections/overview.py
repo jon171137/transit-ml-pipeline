@@ -2,8 +2,21 @@ import pandas as pd
 import streamlit as st
 from typing import Optional
 
+from constants import PROJECT_OVERVIEW_VIDEO_PATH
 from content import PROJECT_OVERVIEW, PROJECT_OVERVIEW_CASE_STUDY, PROJECT_OVERVIEW_SYSTEM
 from formatting import date_range_label, format_int, manifest_value
+
+
+def render_project_overview_video() -> None:
+    st.subheader("Video Overview")
+    st.write(
+        "A narrated walkthrough of the project motivation, approach, system design, "
+        "and main modeling takeaways."
+    )
+    if PROJECT_OVERVIEW_VIDEO_PATH.exists():
+        st.video(str(PROJECT_OVERVIEW_VIDEO_PATH), format="video/mp4", width="stretch")
+    else:
+        st.info(f"Expected overview video not found: `{PROJECT_OVERVIEW_VIDEO_PATH}`")
 
 
 def render_public_bundle_note(experiment_manifest: dict) -> None:
@@ -40,6 +53,7 @@ def render_overview_page(
     overview_intro_cols[0].markdown(PROJECT_OVERVIEW_CASE_STUDY)
     overview_intro_cols[1].markdown(PROJECT_OVERVIEW_SYSTEM)
     st.markdown(PROJECT_OVERVIEW)
+    render_project_overview_video()
     render_public_bundle_note(experiment_manifest)
 
     bundle = experiment_manifest.get("public_dashboard_bundle", {})

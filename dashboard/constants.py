@@ -2,6 +2,7 @@ from pathlib import Path
 
 DEFAULT_ARTIFACT_DIR = Path("dashboard/public_artifacts/latest")
 IMAGE_ASSET_DIR = Path("dashboard/assets/images")
+VIDEO_ASSET_DIR = Path("dashboard/assets/videos")
 DEFAULT_FEATURE_FAMILIES_PATH = Path("dashboard/public_artifacts/latest/feature_families.json")
 EDA_INPUT_DIRNAME = "eda_inputs"
 EDA_INTEGRATED_BASE_FILENAME = "integrated_monthly_base.parquet"
@@ -20,6 +21,7 @@ PHASE_C_MONTHLY_CONFIG_PATH = Path("experiment_configs/phase_c_neural_monthly_fi
 
 # Keep the MOV as the editable capture; use MP4 for browser and Streamlit Cloud playback.
 SYSTEM_ARCH_VIDEO_PATH = IMAGE_ASSET_DIR / "Transit_System_Build.mp4"
+PROJECT_OVERVIEW_VIDEO_PATH = VIDEO_ASSET_DIR / "Transit_Site_Walkthrough_v2_web.mp4"
 STEP_FUNCTION_SCREENSHOT_PATH = IMAGE_ASSET_DIR / "Step_Function_Screenshot.png"
 VIDEO_MIME_TYPES = {".mov": "video/quicktime", ".mp4": "video/mp4", ".webm": "video/webm"}
 

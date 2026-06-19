@@ -41,5 +41,9 @@ logs/
 tmp/
 temp/
 
+# Keep large source video exports out of runtime images.
+dashboard/assets/videos/Transit_Project_Walkthrough.mp4
+dashboard/assets/videos/Transit_Site_Walkthrough_v2.mp4
+
 # Keep notebooks out of the runtime image
 *.ipynb
