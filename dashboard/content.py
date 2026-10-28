@@ -32,12 +32,11 @@ performed.
 
 ### Current Scope
 
-The experimentation has currently covered a range of modeling approaches.
-
-The dashboard now reads a combined DuckDB-derived export that includes baseline,
-linear, tree, and autoregressive model families under one artifact contract.
-Neural-net artifacts are being handled as the next experiment block and will fit
-the same export structure once rerun against the pandemic-safe feature table.
+The historical experiment archive covers baseline, linear, tree,
+autoregressive, and neural-network models. A separate, smaller 2026 comparison
+adds Prophet and evaluates selected challengers using corrected historical
+label-availability rules. Its results are not directly interchangeable with
+the older archive; see the comparison below for the scope and limitations.
 """
 
 

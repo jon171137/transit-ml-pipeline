@@ -1,10 +1,70 @@
+from pathlib import Path
+
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from typing import Optional
 
 from constants import PROJECT_OVERVIEW_VIDEO_PATH
 from content import PROJECT_OVERVIEW, PROJECT_OVERVIEW_CASE_STUDY, PROJECT_OVERVIEW_SYSTEM
 from formatting import date_range_label, format_int, manifest_value
+
+
+REFRESH_COMPARISON = Path("dashboard/public_artifacts/latest/refresh_2026_comparison/model_leaderboard.parquet")
+
+
+def render_refresh_comparison() -> None:
+    """Keep the corrected comparison separate from the older experiment archive."""
+    if not REFRESH_COMPARISON.exists():
+        return
+    results = pd.read_parquet(REFRESH_COMPARISON)
+    required = {"model_build", "feature_family_name", "mode", "mae", "rmse", "selection_score_balanced"}
+    if not required.issubset(results.columns):
+        st.warning("The updated model comparison is unavailable because its artifact is incomplete.")
+        return
+
+    st.subheader("Updated Model Comparison: Prophet And Challengers")
+    st.write(
+        "A focused follow-up compares selected models on 185 monthly rolling forecasts "
+        "with target months April 2011 through August 2026. It includes four Prophet "
+        "configurations and selected XGBoost, linear, SARIMAX, and seasonal-naive "
+        "references, using corrected three-month-ahead training-label availability."
+    )
+    st.caption(
+        "This is a separate nine-configuration comparison, not a re-run of the full "
+        "historical archive shown elsewhere in the dashboard. Prophet finalists were "
+        "chosen using a screen spanning this period, including 2026; their scores are "
+        "retrospective, not an untouched holdout. Source publication lags and historical "
+        "data vintages remain limitations."
+    )
+    labels = {"xgboost": "XGBoost", "prophet": "Prophet", "sarimax": "SARIMAX",
+              "elastic_net": "Elastic Net", "ridge": "Ridge", "seasonal_naive": "Seasonal naive"}
+    display = results.copy().sort_values("selection_score_balanced")
+    display["Model"] = display["model_build"].map(labels).fillna(display["model_build"])
+    display["Configuration"] = display["feature_family_name"].str.replace("_", " ", regex=False) + " / " + display["mode"].astype(str)
+    display["Model and configuration"] = display["Model"] + " | " + display["Configuration"]
+    fig = px.bar(
+        display.sort_values("mae", ascending=True), x="mae", y="Model and configuration",
+        color="Model", orientation="h", hover_data={"rmse": ":,.0f", "mae": ":,.0f"},
+        labels={"mae": "Mean absolute error (monthly UPT)", "Model and configuration": ""},
+    )
+    fig.update_layout(template="plotly_white", showlegend=False, height=430, margin={"l": 30, "r": 25, "t": 20, "b": 45})
+    st.plotly_chart(fig, width="stretch")
+    st.caption("Each bar is one configuration; lower MAE is better. The table also shows RMSE and the balanced ranking score.")
+    table = display[["Model", "Configuration", "mae", "rmse", "selection_score_balanced"]].rename(
+        columns={"mae": "MAE", "rmse": "RMSE", "selection_score_balanced": "Balanced score"}
+    )
+    for column in ["MAE", "RMSE", "Balanced score"]:
+        table[column] = table[column].map(lambda value: f"{value:,.0f}")
+    st.table(table.reset_index(drop=True))
+    st.write(
+        "The best Prophet configuration uses ridership history and calendar features. "
+        "It is competitive overall and in stable periods, but XGBoost's lower errors "
+        "during the COVID shock and recovery give it the full-range lead. Residual "
+        "Elastic Net performed best on the five latest 2026 target months among the "
+        "previously locked challengers; that small sample is not enough to establish "
+        "a durable champion."
+    )
 
 
 def render_project_overview_video() -> None:
@@ -53,6 +113,7 @@ def render_overview_page(
     overview_intro_cols[0].markdown(PROJECT_OVERVIEW_CASE_STUDY)
     overview_intro_cols[1].markdown(PROJECT_OVERVIEW_SYSTEM)
     st.markdown(PROJECT_OVERVIEW)
+    render_refresh_comparison()
     render_project_overview_video()
     render_public_bundle_note(experiment_manifest)
 
